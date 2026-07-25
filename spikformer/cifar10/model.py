@@ -6,6 +6,10 @@ from timm.models.registry import register_model
 from timm.models.vision_transformer import _cfg
 import torch.nn.functional as F
 from functools import partial
+try:
+    from .uncertainty_surrogate import make_surrogate_function
+except ImportError:
+    from uncertainty_surrogate import make_surrogate_function
 __all__ = ['spikformer']
 
 
@@ -16,11 +20,13 @@ class MLP(nn.Module):
         hidden_features = hidden_features or in_features
         self.fc1_linear = nn.Linear(in_features, hidden_features)
         self.fc1_bn = nn.BatchNorm1d(hidden_features)
-        self.fc1_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.fc1_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                        surrogate_function=make_surrogate_function())
 
         self.fc2_linear = nn.Linear(hidden_features, out_features)
         self.fc2_bn = nn.BatchNorm1d(out_features)
-        self.fc2_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.fc2_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                        surrogate_function=make_surrogate_function())
 
         self.c_hidden = hidden_features
         self.c_output = out_features
@@ -47,20 +53,25 @@ class SSA(nn.Module):
         self.scale = 0.125
         self.q_linear = nn.Linear(dim, dim)
         self.q_bn = nn.BatchNorm1d(dim)
-        self.q_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.q_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                      surrogate_function=make_surrogate_function())
 
         self.k_linear = nn.Linear(dim, dim)
         self.k_bn = nn.BatchNorm1d(dim)
-        self.k_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.k_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                      surrogate_function=make_surrogate_function())
 
         self.v_linear = nn.Linear(dim, dim)
         self.v_bn = nn.BatchNorm1d(dim)
-        self.v_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
-        self.attn_lif = MultiStepLIFNode(tau=2.0, v_threshold=0.5, detach_reset=True, backend='cupy')
+        self.v_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                      surrogate_function=make_surrogate_function())
+        self.attn_lif = MultiStepLIFNode(tau=2.0, v_threshold=0.5, detach_reset=True, backend='cupy',
+                                         surrogate_function=make_surrogate_function())
 
         self.proj_linear = nn.Linear(dim, dim)
         self.proj_bn = nn.BatchNorm1d(dim)
-        self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                         surrogate_function=make_surrogate_function())
 
     def forward(self, x):
         T,B,N,C = x.shape
@@ -117,25 +128,30 @@ class SPS(nn.Module):
         self.num_patches = self.H * self.W
         self.proj_conv = nn.Conv2d(in_channels, embed_dims//8, kernel_size=3, stride=1, padding=1, bias=False)
         self.proj_bn = nn.BatchNorm2d(embed_dims//8)
-        self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                         surrogate_function=make_surrogate_function())
 
         self.proj_conv1 = nn.Conv2d(embed_dims//8, embed_dims//4, kernel_size=3, stride=1, padding=1, bias=False)
         self.proj_bn1 = nn.BatchNorm2d(embed_dims//4)
-        self.proj_lif1 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.proj_lif1 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                          surrogate_function=make_surrogate_function())
 
         self.proj_conv2 = nn.Conv2d(embed_dims//4, embed_dims//2, kernel_size=3, stride=1, padding=1, bias=False)
         self.proj_bn2 = nn.BatchNorm2d(embed_dims//2)
-        self.proj_lif2 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.proj_lif2 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                          surrogate_function=make_surrogate_function())
         self.maxpool2 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
 
         self.proj_conv3 = nn.Conv2d(embed_dims//2, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
         self.proj_bn3 = nn.BatchNorm2d(embed_dims)
-        self.proj_lif3 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.proj_lif3 = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                          surrogate_function=make_surrogate_function())
         self.maxpool3 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
 
         self.rpe_conv = nn.Conv2d(embed_dims, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
         self.rpe_bn = nn.BatchNorm2d(embed_dims)
-        self.rpe_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
+        self.rpe_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
+                                        surrogate_function=make_surrogate_function())
 
     def forward(self, x):
         T, B, C, H, W = x.shape
