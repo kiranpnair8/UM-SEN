@@ -7,6 +7,7 @@ import pytest
 torch = pytest.importorskip("torch")
 spikingjelly_surrogate = pytest.importorskip("spikingjelly.clock_driven.surrogate")
 spikingjelly_functional = pytest.importorskip("spikingjelly.clock_driven.functional")
+spikingjelly_neuron = pytest.importorskip("spikingjelly.clock_driven.neuron")
 pytest.importorskip("timm")
 
 
@@ -14,7 +15,7 @@ CIFAR10_DIR = pathlib.Path(__file__).resolve().parents[1]
 if str(CIFAR10_DIR) not in sys.path:
     sys.path.insert(0, str(CIFAR10_DIR))
 
-from model import Spikformer
+import model as refactored_model
 from uncertainty_surrogate import make_surrogate_function
 
 
@@ -62,6 +63,7 @@ def _load_original_model_module():
     source = source.replace(",\n                                         surrogate_function=make_surrogate_function()", "")
     source = source.replace(",\n                                          surrogate_function=make_surrogate_function()", "")
     source = source.replace(",\n                                        surrogate_function=make_surrogate_function()", "")
+    source = source.replace("backend='cupy'", "backend='torch'")
 
     module = types.ModuleType("original_cifar10_model")
     module.__file__ = str(CIFAR10_DIR / "model.py")
@@ -69,10 +71,19 @@ def _load_original_model_module():
     return module
 
 
-def _portable_neuron_backend(model):
-    for module in model.modules():
-        if hasattr(module, "backend"):
-            module.backend = "torch"
+def _torch_backend_lif_node(*args, **kwargs):
+    kwargs["backend"] = "torch"
+    return spikingjelly_neuron.MultiStepLIFNode(*args, **kwargs)
+
+
+def _assert_lif_nodes_use_torch_backend(model):
+    lif_nodes = [
+        module
+        for module in model.modules()
+        if isinstance(module, spikingjelly_neuron.MultiStepLIFNode)
+    ]
+    assert lif_nodes
+    assert all(module.backend == "torch" for module in lif_nodes)
 
 
 def _tiny_model(model_cls):
@@ -95,11 +106,16 @@ def test_refactored_spikformer_matches_original_logits_loss_and_parameter_gradie
     torch.manual_seed(1234)
     original_module = _load_original_model_module()
     original = _tiny_model(original_module.Spikformer)
-    modified = _tiny_model(Spikformer)
+    original_lif_node = refactored_model.MultiStepLIFNode
+    try:
+        refactored_model.MultiStepLIFNode = _torch_backend_lif_node
+        modified = _tiny_model(refactored_model.Spikformer)
+    finally:
+        refactored_model.MultiStepLIFNode = original_lif_node
     modified.load_state_dict(original.state_dict())
 
-    _portable_neuron_backend(original)
-    _portable_neuron_backend(modified)
+    _assert_lif_nodes_use_torch_backend(original)
+    _assert_lif_nodes_use_torch_backend(modified)
     original.eval()
     modified.eval()
 
