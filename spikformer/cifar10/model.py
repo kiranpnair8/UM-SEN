@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 from spikingjelly.clock_driven.neuron import MultiStepLIFNode
 from timm.models.layers import to_2tuple, trunc_normal_, DropPath
 from timm.models.registry import register_model
@@ -51,6 +52,9 @@ class SSA(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.scale = 0.125
+        self.collect_attention_entropy = False
+        self.attention_entropy_eps = 1e-12
+        self.attention_entropy_stats = []
         self.q_linear = nn.Linear(dim, dim)
         self.q_bn = nn.BatchNorm1d(dim)
         self.q_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
@@ -73,6 +77,31 @@ class SSA(nn.Module):
         self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
                                          surrogate_function=make_surrogate_function())
 
+    def set_attention_entropy_collection(self, enabled=True):
+        self.collect_attention_entropy = enabled
+
+    def clear_attention_entropy_stats(self):
+        self.attention_entropy_stats.clear()
+
+    def get_attention_entropy_stats(self):
+        return list(self.attention_entropy_stats)
+
+    def _record_attention_entropy(self, attn):
+        if not self.collect_attention_entropy:
+            return
+        with torch.no_grad():
+            probs = torch.softmax(attn.detach(), dim=-1)
+            entropy = -(probs * (probs + self.attention_entropy_eps).log()).sum(dim=-1)
+            num_tokens = attn.shape[-1]
+            if num_tokens > 1:
+                entropy = entropy / math.log(num_tokens)
+            self.attention_entropy_stats.append({
+                'mean': entropy.mean().detach(),
+                'std': entropy.std(unbiased=False).detach(),
+                'min': entropy.min().detach(),
+                'max': entropy.max().detach(),
+            })
+
     def forward(self, x):
         T,B,N,C = x.shape
 
@@ -93,6 +122,7 @@ class SSA(nn.Module):
         v = v_linear_out.reshape(T, B, N, self.num_heads, C//self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+        self._record_attention_entropy(attn)
         x = attn @ v
         x = x.transpose(2, 3).reshape(T, B, N, C).contiguous()
         x = self.attn_lif(x)
@@ -216,6 +246,26 @@ class Spikformer(nn.Module):
         self.head = nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
         self.apply(self._init_weights)
 
+    def set_attention_entropy_collection(self, enabled=True):
+        block = getattr(self, f"block")
+        for blk in block:
+            blk.attn.set_attention_entropy_collection(enabled)
+
+    def clear_attention_entropy_stats(self):
+        block = getattr(self, f"block")
+        for blk in block:
+            blk.attn.clear_attention_entropy_stats()
+
+    def get_attention_entropy_stats(self):
+        block = getattr(self, f"block")
+        return [
+            {
+                'block': i,
+                'stats': blk.attn.get_attention_entropy_stats(),
+            }
+            for i, blk in enumerate(block)
+        ]
+
     @torch.jit.ignore
     def _get_pos_embed(self, pos_embed, patch_embed, H, W):
         if H * W == self.patch_embed1.num_patches:
@@ -262,5 +312,3 @@ def spikformer(pretrained=False, **kwargs):
     )
     model.default_cfg = _cfg()
     return model
-
-
