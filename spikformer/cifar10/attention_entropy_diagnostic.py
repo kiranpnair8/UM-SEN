@@ -1,6 +1,8 @@
 import argparse
 import json
+import math
 import random
+import types
 from pathlib import Path
 
 import numpy as np
@@ -12,12 +14,17 @@ from torch.utils.data import DataLoader
 from model import Spikformer
 
 
+ATTENTION_TEMPERATURES = (0.25, 0.5, 1.0, 2.0)
+EPS = 1e-12
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="CIFAR-10 Spikformer attention entropy diagnostic")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=str, default="./output/attention_entropy_diagnostic")
     parser.add_argument("--entropy-log-interval", type=int, default=1)
+    parser.add_argument("--attention-top-k", type=int, default=5)
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--val-batch-size", type=int, default=128)
@@ -89,6 +96,7 @@ def build_model(args):
         sr_ratios=1,
         T=args.time_step,
     )
+    install_attention_metric_collectors(model, args.attention_top_k)
     model.set_attention_entropy_collection(True)
     return model
 
@@ -160,6 +168,16 @@ def tensor_to_float(value):
     return float(value)
 
 
+def summarize_tensor(tensor):
+    tensor = tensor.detach()
+    return {
+        "mean": tensor_to_float(tensor.mean()),
+        "std": tensor_to_float(tensor.std(unbiased=False)),
+        "min": tensor_to_float(tensor.min()),
+        "max": tensor_to_float(tensor.max()),
+    }
+
+
 def summarize_stat_records(records):
     if not records:
         return {
@@ -180,17 +198,150 @@ def summarize_stat_records(records):
     }
 
 
-def collect_attention_epoch_stats(model):
-    entropy_blocks = model.get_attention_entropy_stats()
-    score_blocks = model.get_attention_score_stats()
-    score_by_block = {block["block"]: block["stats"] for block in score_blocks}
+def normalized_entropy(probs):
+    num_tokens = probs.shape[-1]
+    entropy = -(probs * (probs + EPS).log()).sum(dim=-1)
+    if num_tokens > 1:
+        entropy = entropy / math.log(num_tokens)
+    return entropy
+
+
+def per_head_summaries(values):
     return [
         {
-            "block": block["block"],
-            "normalized_entropy": summarize_stat_records(block["stats"]),
-            "raw_attention_scores": summarize_stat_records(score_by_block.get(block["block"], [])),
+            "head": head,
+            **summarize_tensor(values[:, :, head, :]),
         }
-        for block in entropy_blocks
+        for head in range(values.shape[2])
+    ]
+
+
+def attention_metric_record(attn, top_k):
+    raw_attn = attn.detach()
+    num_tokens = raw_attn.shape[-1]
+    k = min(top_k, num_tokens)
+    record = {
+        "raw_attention_scores": summarize_tensor(raw_attn),
+        "temperature_entropy": {},
+        "per_head_entropy": {},
+        "attention_sparsity": {},
+        "gini_impurity": {},
+    }
+    for temperature in ATTENTION_TEMPERATURES:
+        temperature_key = str(temperature)
+        probs = torch.softmax(raw_attn / temperature, dim=-1)
+        entropy = normalized_entropy(probs)
+        topk_mass = probs.topk(k=k, dim=-1).values.sum(dim=-1)
+        gini = 1.0 - probs.square().sum(dim=-1)
+        record["temperature_entropy"][temperature_key] = summarize_tensor(entropy)
+        record["per_head_entropy"][temperature_key] = per_head_summaries(entropy)
+        record["attention_sparsity"][temperature_key] = {
+            "top_k": k,
+            **summarize_tensor(topk_mass),
+        }
+        record["gini_impurity"][temperature_key] = summarize_tensor(gini)
+    return record
+
+
+def install_attention_metric_collectors(model, top_k):
+    for block in getattr(model, "block"):
+        attn_module = block.attn
+        attn_module.attention_metric_stats = []
+
+        def record_metrics(self, attn):
+            if not self.collect_attention_entropy:
+                return
+            with torch.no_grad():
+                self.attention_metric_stats.append(attention_metric_record(attn, top_k))
+
+        attn_module._record_attention_entropy = types.MethodType(record_metrics, attn_module)
+
+
+def clear_attention_metric_stats(model):
+    for block in getattr(model, "block"):
+        block.attn.attention_metric_stats.clear()
+
+
+def aggregate_summary_records(records):
+    if not records:
+        return {
+            "mean": None,
+            "std": None,
+            "min": None,
+            "max": None,
+            "num_records": 0,
+        }
+    means = torch.tensor([record["mean"] for record in records], dtype=torch.float64)
+    stds = torch.tensor([record["std"] for record in records], dtype=torch.float64)
+    return {
+        "mean": float(means.mean().item()),
+        "std": float(stds.mean().item()),
+        "min": min(record["min"] for record in records),
+        "max": max(record["max"] for record in records),
+        "num_records": len(records),
+    }
+
+
+def aggregate_per_head_records(records, temperature):
+    if not records:
+        return []
+    num_heads = len(records[0]["per_head_entropy"][temperature])
+    return [
+        {
+            "head": head,
+            **aggregate_summary_records([
+                record["per_head_entropy"][temperature][head]
+                for record in records
+            ]),
+        }
+        for head in range(num_heads)
+    ]
+
+
+def aggregate_temperature_records(records, metric_name, temperature):
+    if metric_name == "per_head_entropy":
+        return aggregate_per_head_records(records, temperature)
+    aggregated = aggregate_summary_records([
+        record[metric_name][temperature]
+        for record in records
+    ])
+    if metric_name == "attention_sparsity" and records:
+        aggregated["top_k"] = records[0][metric_name][temperature]["top_k"]
+    return aggregated
+
+
+def aggregate_attention_metric_records(records):
+    return {
+        "raw_attention_scores": aggregate_summary_records([
+            record["raw_attention_scores"]
+            for record in records
+        ]),
+        "temperature_entropy": {
+            str(temperature): aggregate_temperature_records(records, "temperature_entropy", str(temperature))
+            for temperature in ATTENTION_TEMPERATURES
+        },
+        "per_head_entropy": {
+            str(temperature): aggregate_temperature_records(records, "per_head_entropy", str(temperature))
+            for temperature in ATTENTION_TEMPERATURES
+        },
+        "attention_sparsity": {
+            str(temperature): aggregate_temperature_records(records, "attention_sparsity", str(temperature))
+            for temperature in ATTENTION_TEMPERATURES
+        },
+        "gini_impurity": {
+            str(temperature): aggregate_temperature_records(records, "gini_impurity", str(temperature))
+            for temperature in ATTENTION_TEMPERATURES
+        },
+    }
+
+
+def collect_attention_epoch_stats(model):
+    return [
+        {
+            "block": i,
+            **aggregate_attention_metric_records(block.attn.attention_metric_stats),
+        }
+        for i, block in enumerate(getattr(model, "block"))
     ]
 
 
@@ -200,6 +351,8 @@ def resolved_config(args, device):
         "seed": args.seed,
         "output_dir": args.output_dir,
         "entropy_log_interval": args.entropy_log_interval,
+        "attention_top_k": args.attention_top_k,
+        "attention_temperatures": list(ATTENTION_TEMPERATURES),
         "data_dir": args.data_dir,
         "batch_size": args.batch_size,
         "val_batch_size": args.val_batch_size,
@@ -243,6 +396,7 @@ def main():
     epoch_metrics = []
     for epoch in range(args.epochs):
         model.clear_attention_entropy_stats()
+        clear_attention_metric_stats(model)
         train_metrics = train_one_epoch(
             model, train_loader, criterion, optimizer, device, args.entropy_log_interval
         )
@@ -258,6 +412,7 @@ def main():
         write_json(output_dir / "metrics.json", {"config": config, "epochs": epoch_metrics})
         write_json(output_dir / f"epoch_{epoch:03d}.json", epoch_record)
         model.clear_attention_entropy_stats()
+        clear_attention_metric_stats(model)
 
 
 if __name__ == "__main__":
