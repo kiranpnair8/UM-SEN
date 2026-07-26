@@ -102,16 +102,20 @@ def _tiny_model(model_cls):
     )
 
 
+def _tiny_refactored_model_with_torch_backend():
+    original_lif_node = refactored_model.MultiStepLIFNode
+    try:
+        refactored_model.MultiStepLIFNode = _torch_backend_lif_node
+        return _tiny_model(refactored_model.Spikformer)
+    finally:
+        refactored_model.MultiStepLIFNode = original_lif_node
+
+
 def test_refactored_spikformer_matches_original_logits_loss_and_parameter_gradients():
     torch.manual_seed(1234)
     original_module = _load_original_model_module()
     original = _tiny_model(original_module.Spikformer)
-    original_lif_node = refactored_model.MultiStepLIFNode
-    try:
-        refactored_model.MultiStepLIFNode = _torch_backend_lif_node
-        modified = _tiny_model(refactored_model.Spikformer)
-    finally:
-        refactored_model.MultiStepLIFNode = original_lif_node
+    modified = _tiny_refactored_model_with_torch_backend()
     modified.load_state_dict(original.state_dict())
 
     _assert_lif_nodes_use_torch_backend(original)
@@ -147,3 +151,60 @@ def test_refactored_spikformer_matches_original_logits_loss_and_parameter_gradie
 
     spikingjelly_functional.reset_net(original)
     spikingjelly_functional.reset_net(modified)
+
+
+def test_attention_entropy_collection_does_not_change_logits_loss_or_parameter_gradients():
+    torch.manual_seed(5678)
+    disabled = _tiny_refactored_model_with_torch_backend()
+    enabled = _tiny_refactored_model_with_torch_backend()
+    enabled.load_state_dict(disabled.state_dict())
+
+    _assert_lif_nodes_use_torch_backend(disabled)
+    _assert_lif_nodes_use_torch_backend(enabled)
+    disabled.eval()
+    enabled.eval()
+
+    disabled_stats = disabled.get_attention_entropy_stats()
+    assert all(block_stats["stats"] == [] for block_stats in disabled_stats)
+    enabled.set_attention_entropy_collection(True)
+    enabled.clear_attention_entropy_stats()
+
+    input_batch = torch.randn(2, 3, 8, 8)
+    target = torch.tensor([0, 4], dtype=torch.long)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    disabled_logits = disabled(input_batch)
+    enabled_logits = enabled(input_batch.clone())
+    torch.testing.assert_close(enabled_logits, disabled_logits, rtol=0.0, atol=0.0)
+
+    entropy_stats = enabled.get_attention_entropy_stats()
+    assert len(entropy_stats) == 1
+    assert len(entropy_stats[0]["stats"]) == 1
+    stat = entropy_stats[0]["stats"][0]
+    assert set(stat) == {"mean", "std", "min", "max"}
+    for value in stat.values():
+        assert not value.requires_grad
+    assert 0.0 <= stat["min"].item() <= stat["max"].item() <= 1.0 + 1e-6
+
+    disabled_loss = criterion(disabled_logits, target)
+    enabled_loss = criterion(enabled_logits, target)
+    torch.testing.assert_close(enabled_loss, disabled_loss, rtol=0.0, atol=0.0)
+
+    disabled.zero_grad(set_to_none=True)
+    enabled.zero_grad(set_to_none=True)
+    disabled_loss.backward()
+    enabled_loss.backward()
+
+    for (disabled_name, disabled_param), (enabled_name, enabled_param) in zip(
+        disabled.named_parameters(), enabled.named_parameters()
+    ):
+        assert enabled_name == disabled_name
+        if disabled_param.grad is None:
+            assert enabled_param.grad is None
+            continue
+        torch.testing.assert_close(enabled_param.grad, disabled_param.grad, rtol=0.0, atol=0.0)
+
+    enabled.clear_attention_entropy_stats()
+    assert all(block_stats["stats"] == [] for block_stats in enabled.get_attention_entropy_stats())
+    spikingjelly_functional.reset_net(disabled)
+    spikingjelly_functional.reset_net(enabled)
