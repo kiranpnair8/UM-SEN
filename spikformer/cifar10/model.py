@@ -55,6 +55,7 @@ class SSA(nn.Module):
         self.collect_attention_entropy = False
         self.attention_entropy_eps = 1e-12
         self.attention_entropy_stats = []
+        self.attention_score_stats = []
         self.q_linear = nn.Linear(dim, dim)
         self.q_bn = nn.BatchNorm1d(dim)
         self.q_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy',
@@ -82,14 +83,25 @@ class SSA(nn.Module):
 
     def clear_attention_entropy_stats(self):
         self.attention_entropy_stats.clear()
+        self.attention_score_stats.clear()
 
     def get_attention_entropy_stats(self):
         return list(self.attention_entropy_stats)
+
+    def get_attention_score_stats(self):
+        return list(self.attention_score_stats)
 
     def _record_attention_entropy(self, attn):
         if not self.collect_attention_entropy:
             return
         with torch.no_grad():
+            raw_attn = attn.detach()
+            self.attention_score_stats.append({
+                'mean': raw_attn.mean().detach(),
+                'std': raw_attn.std(unbiased=False).detach(),
+                'min': raw_attn.min().detach(),
+                'max': raw_attn.max().detach(),
+            })
             probs = torch.softmax(attn.detach(), dim=-1)
             entropy = -(probs * (probs + self.attention_entropy_eps).log()).sum(dim=-1)
             num_tokens = attn.shape[-1]
@@ -262,6 +274,16 @@ class Spikformer(nn.Module):
             {
                 'block': i,
                 'stats': blk.attn.get_attention_entropy_stats(),
+            }
+            for i, blk in enumerate(block)
+        ]
+
+    def get_attention_score_stats(self):
+        block = getattr(self, f"block")
+        return [
+            {
+                'block': i,
+                'stats': blk.attn.get_attention_score_stats(),
             }
             for i, blk in enumerate(block)
         ]
