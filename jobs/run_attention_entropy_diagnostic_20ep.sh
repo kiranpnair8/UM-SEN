@@ -18,7 +18,7 @@ mkdir -p logs
 mkdir -p results/attention_entropy_diagnostic_20ep
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate act_snn
+conda activate snn
 
 python attention_entropy_diagnostic.py \
   --epochs 20 \
