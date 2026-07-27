@@ -11,23 +11,26 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+JOBS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${JOBS_DIR}/.." && pwd)"
+OUTPUT_DIR="${REPO_ROOT}/results/attention_entropy_diagnostic_20ep"
 
-mkdir -p logs
-mkdir -p results/attention_entropy_diagnostic_20ep
+mkdir -p "${REPO_ROOT}/logs"
+mkdir -p "${OUTPUT_DIR}"
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate snn
+conda activate act_snn
+
+cd "${REPO_ROOT}/spikformer/cifar10"
 
 python attention_entropy_diagnostic.py \
   --epochs 20 \
   --seed 42 \
-  --output-dir results/attention_entropy_diagnostic_20ep \
+  --output-dir "${OUTPUT_DIR}" \
   --entropy-log-interval 1
 
-test -f results/attention_entropy_diagnostic_20ep/metrics.json
-test -f results/attention_entropy_diagnostic_20ep/config.json
-compgen -G "results/attention_entropy_diagnostic_20ep/epoch_*.json" > /dev/null
+test -f "${OUTPUT_DIR}/metrics.json"
+test -f "${OUTPUT_DIR}/config.json"
+compgen -G "${OUTPUT_DIR}/epoch_*.json" > /dev/null
 
-echo "Verified diagnostic outputs in ${SCRIPT_DIR}/results/attention_entropy_diagnostic_20ep"
+echo "Verified diagnostic outputs in ${OUTPUT_DIR}"
