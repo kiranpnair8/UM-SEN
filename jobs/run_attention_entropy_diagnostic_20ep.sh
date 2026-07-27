@@ -13,6 +13,7 @@ REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 OUTPUT_DIR="${REPO_ROOT}/results/attention_entropy_diagnostic_20ep"
 LOG_DIR="${REPO_ROOT}/logs"
 LOG_FILE="${LOG_DIR}/attention_entropy_diagnostic_20ep_${SLURM_JOB_ID:-manual}.log"
+SNN_ENV="/home/rizk_lab/shared/kiran/envs/snn"
 
 mkdir -p "${LOG_DIR}"
 mkdir -p "${OUTPUT_DIR}"
@@ -21,18 +22,11 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "Logging to ${LOG_FILE}"
 echo "Repository root: ${REPO_ROOT}"
+echo "Activating SNN environment: ${SNN_ENV}"
 
-shopt -s expand_aliases
-if [ -f "${HOME}/.bashrc" ]; then
-  source "${HOME}/.bashrc"
-fi
-
-if command -v act_snn >/dev/null 2>&1; then
-  act_snn
-else
-  source "$(conda info --base)/etc/profile.d/conda.sh"
-  conda activate snn
-fi
+source "${SNN_ENV}/bin/activate"
+which python
+python --version
 
 cd "${REPO_ROOT}/spikformer/cifar10"
 
