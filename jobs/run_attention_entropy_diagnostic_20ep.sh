@@ -22,8 +22,7 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "Logging to ${LOG_FILE}"
 echo "Repository root: ${REPO_ROOT}"
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate act_snn
+act_snn
 
 cd "${REPO_ROOT}/spikformer/cifar10"
 
