@@ -6,17 +6,21 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/attention_entropy_diagnostic_20ep_%j.log
-#SBATCH --error=logs/attention_entropy_diagnostic_20ep_%j.log
 
 set -euo pipefail
 
-JOBS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${JOBS_DIR}/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 OUTPUT_DIR="${REPO_ROOT}/results/attention_entropy_diagnostic_20ep"
+LOG_DIR="${REPO_ROOT}/logs"
+LOG_FILE="${LOG_DIR}/attention_entropy_diagnostic_20ep_${SLURM_JOB_ID:-manual}.log"
 
-mkdir -p "${REPO_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
 mkdir -p "${OUTPUT_DIR}"
+
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+echo "Logging to ${LOG_FILE}"
+echo "Repository root: ${REPO_ROOT}"
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate act_snn
