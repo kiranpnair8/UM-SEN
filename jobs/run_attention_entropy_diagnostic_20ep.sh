@@ -24,7 +24,8 @@ echo "Logging to ${LOG_FILE}"
 echo "Repository root: ${REPO_ROOT}"
 echo "Activating SNN environment: ${SNN_ENV}"
 
-source "${SNN_ENV}/bin/activate"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "${SNN_ENV}"
 which python
 python --version
 
