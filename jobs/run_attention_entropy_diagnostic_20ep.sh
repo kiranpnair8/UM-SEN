@@ -11,6 +11,7 @@ set -euo pipefail
 
 REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 OUTPUT_DIR="${REPO_ROOT}/results/attention_entropy_diagnostic_20ep"
+DATA_DIR="${REPO_ROOT}/data"
 LOG_DIR="${REPO_ROOT}/logs"
 LOG_FILE="${LOG_DIR}/attention_entropy_diagnostic_20ep_${SLURM_JOB_ID:-manual}.log"
 SNN_ENV="/home/rizk_lab/shared/kiran/envs/snn"
@@ -22,6 +23,7 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "Logging to ${LOG_FILE}"
 echo "Repository root: ${REPO_ROOT}"
+echo "CIFAR-10 data directory: ${DATA_DIR}"
 echo "Activating SNN environment: ${SNN_ENV}"
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -35,6 +37,7 @@ python attention_entropy_diagnostic.py \
   --epochs 20 \
   --seed 42 \
   --output-dir "${OUTPUT_DIR}" \
+  --data-dir "${DATA_DIR}" \
   --entropy-log-interval 1
 
 test -f "${OUTPUT_DIR}/metrics.json"
