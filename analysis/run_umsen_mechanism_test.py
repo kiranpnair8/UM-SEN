@@ -232,7 +232,7 @@ class BlockController:
 
     def set_centered_alpha(self, centered_z):
         self.centered_z = centered_z
-        self.alpha = min(max(4.0 + math.tanh(centered_z), self.alpha_min), self.alpha_max)
+        self.alpha = min(max(4.0 + 0.5 * math.tanh(centered_z), self.alpha_min), self.alpha_max)
         self.centered_z_history.append(self.centered_z)
         self.alpha_history.append(self.alpha)
 
@@ -254,6 +254,7 @@ class UMSENMechanism:
         ]
         self.last_applied_alphas = [4.0 for _ in self.controllers]
         self.step = 0
+        self.current_epoch = 0
         self.warmup_steps = args.warmup_steps
         self.handles_installed = False
         if mode in ("umsen", "shuffled"):
@@ -272,10 +273,19 @@ class UMSENMechanism:
             attn_module._record_attention_entropy = types.MethodType(record_attention, attn_module)
         self.handles_installed = True
 
+    def start_epoch(self, epoch):
+        self.current_epoch = epoch
+        self.reset_profile()
+
+    def reset_profile(self):
+        for controller in self.controllers:
+            controller.entropy_compute_seconds = 0.0
+            controller.controller_update_seconds = 0.0
+
     def current_controller_alphas(self):
         if self.mode == "baseline":
             return [4.0 for _ in self.controllers]
-        if self.step < self.warmup_steps:
+        if self.current_epoch == 0 or self.step < self.warmup_steps:
             return [4.0 for _ in self.controllers]
         return [controller.alpha for controller in self.controllers]
 
@@ -379,8 +389,9 @@ def gradient_norm(model):
     return math.sqrt(total)
 
 
-def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracker, device):
+def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracker, device, epoch):
     model.train()
+    mechanism.start_epoch(epoch)
     spike_tracker.reset()
     total_loss = 0.0
     total_correct = 0
@@ -492,7 +503,7 @@ def run_config(config_name, args, device):
     try:
         for epoch in range(args.epochs):
             train_metrics = train_one_epoch(
-                model, train_loader, criterion, optimizer, mechanism, spike_tracker, device
+                model, train_loader, criterion, optimizer, mechanism, spike_tracker, device, epoch
             )
             val_metrics = validate(model, val_loader, criterion, device)
             record = {
