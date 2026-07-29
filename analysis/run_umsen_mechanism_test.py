@@ -182,6 +182,7 @@ class BlockController:
         self.raw_dispersion = 0.0
         self.ema_dispersion = 0.5
         self.normalized_z = 0.0
+        self.centered_z = 0.0
         self.alpha = 4.0
         self.initialized = False
         self.running_count = 0
@@ -190,6 +191,7 @@ class BlockController:
         self.raw_history = []
         self.ema_history = []
         self.z_history = []
+        self.centered_z_history = []
         self.alpha_history = []
         self.entropy_compute_seconds = 0.0
         self.controller_update_seconds = 0.0
@@ -223,12 +225,16 @@ class BlockController:
             running_variance = self.running_m2 / max(self.running_count - 1, 1)
             running_std = math.sqrt(max(running_variance, 0.0))
             self.normalized_z = (self.ema_dispersion - self.running_mean) / (running_std + 1e-6)
-            self.alpha = min(max(4.0 + math.tanh(self.normalized_z), self.alpha_min), self.alpha_max)
             self.raw_history.append(self.raw_dispersion)
             self.ema_history.append(self.ema_dispersion)
             self.z_history.append(self.normalized_z)
-            self.alpha_history.append(self.alpha)
             self.controller_update_seconds += time.perf_counter() - update_start
+
+    def set_centered_alpha(self, centered_z):
+        self.centered_z = centered_z
+        self.alpha = min(max(4.0 + math.tanh(centered_z), self.alpha_min), self.alpha_max)
+        self.centered_z_history.append(self.centered_z)
+        self.alpha_history.append(self.alpha)
 
 
 class UMSENMechanism:
@@ -285,6 +291,14 @@ class UMSENMechanism:
         self.last_applied_alphas = [float(alpha) for alpha in alphas]
         return self.last_applied_alphas
 
+    def update_centered_alphas(self):
+        if self.mode not in ("umsen", "shuffled"):
+            return
+        z_values = [controller.normalized_z for controller in self.controllers]
+        mean_z = float(np.mean(z_values)) if z_values else 0.0
+        for controller in self.controllers:
+            controller.set_centered_alpha(controller.normalized_z - mean_z)
+
     def finish_step(self):
         self.step += 1
 
@@ -296,6 +310,7 @@ class UMSENMechanism:
                 "raw_entropy_dispersion": controller.raw_dispersion,
                 "ema_entropy_dispersion": controller.ema_dispersion,
                 "normalized_z": controller.normalized_z,
+                "centered_z": controller.centered_z,
             }
             for controller in self.controllers
         }
@@ -315,6 +330,7 @@ class UMSENMechanism:
                 "raw_dispersion": summarize_values(controller.raw_history),
                 "ema_dispersion": summarize_values(controller.ema_history),
                 "normalized_z": summarize_values(controller.z_history),
+                "centered_z": summarize_values(controller.centered_z_history),
                 "alpha": summarize_values(controller.alpha_history),
                 "pct_steps_near_clamp": pct_near_clamp(
                     controller.alpha_history, controller.alpha_min, controller.alpha_max
@@ -378,6 +394,7 @@ def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracke
         targets = targets.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         logits = model(images)
+        mechanism.update_centered_alphas()
         loss = criterion(logits, targets)
         loss.backward()
         grad_norms.append(gradient_norm(model))
@@ -401,6 +418,7 @@ def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracke
         "raw_entropy_dispersion_per_block": mean_block_stats(block_records, "raw_entropy_dispersion"),
         "ema_entropy_dispersion_per_block": mean_block_stats(block_records, "ema_entropy_dispersion"),
         "normalized_z_per_block": mean_block_stats(block_records, "normalized_z"),
+        "centered_z_per_block": mean_block_stats(block_records, "centered_z"),
         "controller_profile": mechanism.profile_summary(len(block_records)),
     }
 
@@ -522,6 +540,7 @@ def print_controller_debug(config_name, epoch, debug_summary):
             f"raw[{format_summary(block['raw_dispersion'])}] "
             f"ema[{format_summary(block['ema_dispersion'])}] "
             f"z[{format_summary(block['normalized_z'])}] "
+            f"z_centered[{format_summary(block['centered_z'])}] "
             f"alpha[{format_summary(block['alpha'])}] "
             f"near_clamp={clamp_text}",
             flush=True,
