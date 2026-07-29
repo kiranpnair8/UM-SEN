@@ -50,8 +50,10 @@ def parse_args():
     parser.add_argument("--mlp-ratio", type=int, default=4)
     parser.add_argument("--entropy-temperature", type=float, default=0.25)
     parser.add_argument("--ema-beta", type=float, default=0.95)
-    parser.add_argument("--alpha-min", type=float, default=2.0)
-    parser.add_argument("--alpha-max", type=float, default=6.0)
+    parser.add_argument("--warmup-steps", type=int, default=100)
+    parser.add_argument("--alpha-min", type=float, default=3.0)
+    parser.add_argument("--alpha-max", type=float, default=5.0)
+    parser.add_argument("--debug-controller", action="store_true")
     return parser.parse_args()
 
 
@@ -179,11 +181,22 @@ class BlockController:
         self.temperature = temperature
         self.raw_dispersion = 0.0
         self.ema_dispersion = 0.5
+        self.normalized_z = 0.0
         self.alpha = 4.0
         self.initialized = False
+        self.running_count = 0
+        self.running_mean = 0.0
+        self.running_m2 = 0.0
+        self.raw_history = []
+        self.ema_history = []
+        self.z_history = []
+        self.alpha_history = []
+        self.entropy_compute_seconds = 0.0
+        self.controller_update_seconds = 0.0
 
     def observe(self, attn):
         with torch.no_grad():
+            entropy_start = time.perf_counter()
             probs = torch.softmax(attn.detach() / self.temperature, dim=-1)
             entropy = -(probs * (probs + 1e-12).log()).sum(dim=-1)
             num_tokens = attn.shape[-1]
@@ -192,14 +205,30 @@ class BlockController:
             per_head_entropy = entropy.mean(dim=(0, 1, 3))
             raw = per_head_entropy.std(unbiased=False)
             raw_value = float(raw.detach().cpu().item())
+            self.entropy_compute_seconds += time.perf_counter() - entropy_start
+
+            update_start = time.perf_counter()
             if self.initialized:
                 self.ema_dispersion = self.beta * self.ema_dispersion + (1.0 - self.beta) * raw_value
             else:
                 self.ema_dispersion = raw_value
                 self.initialized = True
             self.raw_dispersion = raw_value
-            normalized = min(max(self.ema_dispersion, 0.0), 1.0)
-            self.alpha = self.alpha_min + (self.alpha_max - self.alpha_min) * normalized
+
+            self.running_count += 1
+            delta = self.ema_dispersion - self.running_mean
+            self.running_mean += delta / self.running_count
+            delta2 = self.ema_dispersion - self.running_mean
+            self.running_m2 += delta * delta2
+            running_variance = self.running_m2 / max(self.running_count - 1, 1)
+            running_std = math.sqrt(max(running_variance, 0.0))
+            self.normalized_z = (self.ema_dispersion - self.running_mean) / (running_std + 1e-6)
+            self.alpha = min(max(4.0 + math.tanh(self.normalized_z), self.alpha_min), self.alpha_max)
+            self.raw_history.append(self.raw_dispersion)
+            self.ema_history.append(self.ema_dispersion)
+            self.z_history.append(self.normalized_z)
+            self.alpha_history.append(self.alpha)
+            self.controller_update_seconds += time.perf_counter() - update_start
 
 
 class UMSENMechanism:
@@ -218,6 +247,8 @@ class UMSENMechanism:
             for i, _ in enumerate(getattr(model, "block"))
         ]
         self.last_applied_alphas = [4.0 for _ in self.controllers]
+        self.step = 0
+        self.warmup_steps = args.warmup_steps
         self.handles_installed = False
         if mode in ("umsen", "shuffled"):
             self.install_attention_hooks()
@@ -238,6 +269,8 @@ class UMSENMechanism:
     def current_controller_alphas(self):
         if self.mode == "baseline":
             return [4.0 for _ in self.controllers]
+        if self.step < self.warmup_steps:
+            return [4.0 for _ in self.controllers]
         return [controller.alpha for controller in self.controllers]
 
     def apply_step_alphas(self):
@@ -252,6 +285,9 @@ class UMSENMechanism:
         self.last_applied_alphas = [float(alpha) for alpha in alphas]
         return self.last_applied_alphas
 
+    def finish_step(self):
+        self.step += 1
+
     def snapshot(self):
         return {
             str(controller.block_id): {
@@ -259,9 +295,52 @@ class UMSENMechanism:
                 "controller_alpha": controller.alpha,
                 "raw_entropy_dispersion": controller.raw_dispersion,
                 "ema_entropy_dispersion": controller.ema_dispersion,
+                "normalized_z": controller.normalized_z,
             }
             for controller in self.controllers
         }
+
+    def profile_summary(self, num_batches):
+        entropy_seconds = sum(controller.entropy_compute_seconds for controller in self.controllers)
+        update_seconds = sum(controller.controller_update_seconds for controller in self.controllers)
+        denominator = max(num_batches, 1)
+        return {
+            "attention_entropy_ms_per_batch": 1000.0 * entropy_seconds / denominator,
+            "controller_update_ms_per_batch": 1000.0 * update_seconds / denominator,
+        }
+
+    def debug_summary(self):
+        return {
+            str(controller.block_id): {
+                "raw_dispersion": summarize_values(controller.raw_history),
+                "ema_dispersion": summarize_values(controller.ema_history),
+                "normalized_z": summarize_values(controller.z_history),
+                "alpha": summarize_values(controller.alpha_history),
+                "pct_steps_near_clamp": pct_near_clamp(
+                    controller.alpha_history, controller.alpha_min, controller.alpha_max
+                ),
+            }
+            for controller in self.controllers
+        }
+
+
+def summarize_values(values):
+    if not values:
+        return {"min": None, "mean": None, "max": None}
+    array = np.asarray(values, dtype=float)
+    return {
+        "min": float(np.min(array)),
+        "mean": float(np.mean(array)),
+        "max": float(np.max(array)),
+    }
+
+
+def pct_near_clamp(values, alpha_min, alpha_max):
+    if not values:
+        return None
+    array = np.asarray(values, dtype=float)
+    near = (array <= alpha_min + 0.05) | (array >= alpha_max - 0.05)
+    return float(100.0 * np.mean(near))
 
 
 def mean_block_stats(records, key):
@@ -304,6 +383,7 @@ def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracke
         grad_norms.append(gradient_norm(model))
         optimizer.step()
         block_records.append(mechanism.snapshot())
+        mechanism.finish_step()
         functional.reset_net(model)
 
         batch_size = images.size(0)
@@ -320,6 +400,8 @@ def train_one_epoch(model, loader, criterion, optimizer, mechanism, spike_tracke
         "controller_alpha_per_block": mean_block_stats(block_records, "controller_alpha"),
         "raw_entropy_dispersion_per_block": mean_block_stats(block_records, "raw_entropy_dispersion"),
         "ema_entropy_dispersion_per_block": mean_block_stats(block_records, "ema_entropy_dispersion"),
+        "normalized_z_per_block": mean_block_stats(block_records, "normalized_z"),
+        "controller_profile": mechanism.profile_summary(len(block_records)),
     }
 
 
@@ -371,8 +453,10 @@ def resolved_config(args, device):
         "mlp_ratio": args.mlp_ratio,
         "entropy_temperature": args.entropy_temperature,
         "ema_beta": args.ema_beta,
+        "warmup_steps": args.warmup_steps,
         "alpha_min": args.alpha_min,
         "alpha_max": args.alpha_max,
+        "debug_controller": args.debug_controller,
         "fixed_baseline_alpha": 4.0,
         "device": str(device),
     }
@@ -398,18 +482,50 @@ def run_config(config_name, args, device):
                 "train": train_metrics,
                 "validation": val_metrics,
             }
+            if args.debug_controller:
+                record["controller_debug"] = mechanism.debug_summary()
             records.append(record)
             print(
                 f"{config_name} epoch {epoch}: "
                 f"train_acc={train_metrics['accuracy']:.4f} "
                 f"val_acc={val_metrics['accuracy']:.4f} "
                 f"grad_norm={train_metrics['gradient_norm']:.4f} "
-                f"spike_rate={train_metrics['spike_rate']:.4f}",
+                f"spike_rate={train_metrics['spike_rate']:.4f} "
+                f"entropy_ms={train_metrics['controller_profile']['attention_entropy_ms_per_batch']:.4f} "
+                f"update_ms={train_metrics['controller_profile']['controller_update_ms_per_batch']:.4f}",
                 flush=True,
             )
+            if args.debug_controller:
+                print_controller_debug(config_name, epoch, record["controller_debug"])
     finally:
         spike_tracker.close()
     return records
+
+
+def format_summary(summary):
+    if summary["min"] is None:
+        return "min=NA mean=NA max=NA"
+    return f"min={summary['min']:.6f} mean={summary['mean']:.6f} max={summary['max']:.6f}"
+
+
+def print_controller_debug(config_name, epoch, debug_summary):
+    print(f"{config_name} epoch {epoch} controller debug:", flush=True)
+    for block_id in sorted(debug_summary.keys(), key=int):
+        block = debug_summary[block_id]
+        clamp_text = (
+            "NA"
+            if block["pct_steps_near_clamp"] is None
+            else f"{block['pct_steps_near_clamp']:.2f}%"
+        )
+        print(
+            f"  block {block_id}: "
+            f"raw[{format_summary(block['raw_dispersion'])}] "
+            f"ema[{format_summary(block['ema_dispersion'])}] "
+            f"z[{format_summary(block['normalized_z'])}] "
+            f"alpha[{format_summary(block['alpha'])}] "
+            f"near_clamp={clamp_text}",
+            flush=True,
+        )
 
 
 def main():
