@@ -232,7 +232,11 @@ class BlockController:
 
     def set_centered_alpha(self, centered_z):
         self.centered_z = centered_z
-        self.alpha = min(max(4.0 + 0.5 * math.tanh(centered_z), self.alpha_min), self.alpha_max)
+        if abs(centered_z) < 0.25:
+            alpha = 4.0
+        else:
+            alpha = 4.0 + 0.5 * math.tanh(centered_z)
+        self.alpha = min(max(alpha, self.alpha_min), self.alpha_max)
         self.centered_z_history.append(self.centered_z)
         self.alpha_history.append(self.alpha)
 
