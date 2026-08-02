@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --nodelist=gpu005
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --time=7-00:00:00
 
 set -euo pipefail
@@ -48,10 +48,16 @@ test -f "${OUTPUT_DIR}/umsen_seed43.json"
 test -f "${OUTPUT_DIR}/umsen_seed44.json"
 test -f "${OUTPUT_DIR}/summary.json"
 test -f "${OUTPUT_DIR}/checkpoints/baseline_seed42_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/baseline_seed42_latest.pth"
 test -f "${OUTPUT_DIR}/checkpoints/baseline_seed43_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/baseline_seed43_latest.pth"
 test -f "${OUTPUT_DIR}/checkpoints/baseline_seed44_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/baseline_seed44_latest.pth"
 test -f "${OUTPUT_DIR}/checkpoints/umsen_seed42_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/umsen_seed42_latest.pth"
 test -f "${OUTPUT_DIR}/checkpoints/umsen_seed43_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/umsen_seed43_latest.pth"
 test -f "${OUTPUT_DIR}/checkpoints/umsen_seed44_best.pth"
+test -f "${OUTPUT_DIR}/checkpoints/umsen_seed44_latest.pth"
 
 echo "Verified UM-SEN 100-epoch benchmark outputs in ${OUTPUT_DIR}"
