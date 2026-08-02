@@ -11,3 +11,9 @@ __pycache__/
 # Local datasets and experiment outputs
 data/
 output/
+
+# Generated figures
+figures/
+
+# SLURM output logs
+slurm-*.out
