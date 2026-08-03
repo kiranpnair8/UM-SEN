@@ -32,6 +32,8 @@ echo "Activating SNN environment: ${SNN_ENV}"
 echo "Baseline log: ${BASELINE_LOG}"
 echo "UM-SEN log: ${UMSEN_LOG}"
 
+export PYTHONPATH="${REPO_ROOT}/spikformer/cifar10:${PYTHONPATH:-}"
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${SNN_ENV}"
 which python
@@ -66,7 +68,7 @@ run_umsen() {
 
 export -f run_baseline
 export -f run_umsen
-export REPO_ROOT OUTPUT_DIR DATA_DIR SNN_ENV
+export REPO_ROOT OUTPUT_DIR DATA_DIR SNN_ENV PYTHONPATH
 
 srun --exclusive --nodes=1 --ntasks=1 --gres=gpu:1 --nodelist=gpu004 \
   bash -lc 'source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate "${SNN_ENV}"; run_baseline' \
