@@ -46,7 +46,7 @@ run_baseline() {
     python train.py \
       -c cifar10.yml \
       --seed "${SEED}" \
-      --data-dir "${DATA_DIR}" \
+      -data-dir "${DATA_DIR}" \
       --output "${OUTPUT_DIR}" \
       --experiment "baseline_seed${SEED}"
   done
@@ -59,7 +59,7 @@ run_umsen() {
     python train_umsen.py \
       -c cifar10.yml \
       --seed "${SEED}" \
-      --data-dir "${DATA_DIR}" \
+      -data-dir "${DATA_DIR}" \
       --output "${OUTPUT_DIR}" \
       --experiment "umsen_seed${SEED}" \
       --umsen
