@@ -327,6 +327,7 @@ class Spikformer(nn.Module):
 def spikformer(pretrained=False, **kwargs):
     kwargs.pop("pretrained_cfg", None)
     kwargs.pop("pretrained_cfg_overlay", None)
+    kwargs.pop("cache_dir", None)
     model = Spikformer(
         # img_size_h=224, img_size_w=224,
         # patch_size=16, embed_dims=768, num_heads=12, mlp_ratios=4,
