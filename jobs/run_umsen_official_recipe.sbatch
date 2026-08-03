@@ -44,7 +44,7 @@ for SEED in 42 43 44; do
     --experiment "baseline_seed${SEED}"
 
   echo "Running official UM-SEN seed ${SEED}"
-  python train.py \
+  python train_umsen.py \
     -c cifar10.yml \
     --seed "${SEED}" \
     --data-dir "${DATA_DIR}" \
