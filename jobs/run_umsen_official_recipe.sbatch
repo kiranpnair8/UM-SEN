@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=umsen-official
 #SBATCH --partition=gpu
-#SBATCH --nodes=2
-#SBATCH --nodelist=gpu004,gpu005
+#SBATCH --nodes=1
+#SBATCH --nodelist=gpu005
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
