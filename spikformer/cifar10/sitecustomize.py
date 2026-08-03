@@ -15,6 +15,7 @@ try:
         def create_model(*args, **kwargs):
             kwargs.pop("pretrained_cfg", None)
             kwargs.pop("pretrained_cfg_overlay", None)
+            kwargs.pop("cache_dir", None)
             return _create_model(*args, **kwargs)
 
         timm_models.create_model = create_model
