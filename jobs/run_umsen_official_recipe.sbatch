@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=baseline-official
+#SBATCH --job-name=umsen-official
 #SBATCH --partition=gpu
 #SBATCH --nodelist=gpu005
 #SBATCH --gres=gpu:1
@@ -13,7 +13,7 @@ REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 OUTPUT_DIR="${REPO_ROOT}/results/umsen_official_recipe"
 DATA_DIR="${REPO_ROOT}/data"
 LOG_DIR="${REPO_ROOT}/logs"
-LOG_FILE="${LOG_DIR}/official_baseline_gpu005_${SLURM_JOB_ID:-manual}.log"
+LOG_FILE="${LOG_DIR}/official_umsen_gpu005_${SLURM_JOB_ID:-manual}.log"
 SNN_ENV="/home/rizk_lab/shared/kiran/envs/snn"
 
 mkdir -p "${LOG_DIR}"
@@ -37,18 +37,20 @@ python --version
 cd "${REPO_ROOT}/spikformer/cifar10"
 
 for SEED in 42 43 44; do
-  echo "Running official baseline seed ${SEED} on gpu005"
+  echo "Running official UM-SEN seed ${SEED} on gpu005"
   python train.py \
     -c cifar10.yml \
+    --umsen \
     --seed "${SEED}" \
     -data-dir "${DATA_DIR}" \
     --output "${OUTPUT_DIR}" \
-    --experiment "baseline_seed${SEED}"
+    --experiment "umsen_seed${SEED}"
 done
 
 for SEED in 42 43 44; do
-  test -f "${OUTPUT_DIR}/baseline_seed${SEED}/summary.csv"
-  test -f "${OUTPUT_DIR}/baseline_seed${SEED}/args.yaml"
+  test -f "${OUTPUT_DIR}/umsen_seed${SEED}/summary.csv"
+  test -f "${OUTPUT_DIR}/umsen_seed${SEED}/args.yaml"
+  test -f "${OUTPUT_DIR}/umsen_seed${SEED}/umsen_controller.json"
 done
 
-echo "Verified official-recipe baseline outputs in ${OUTPUT_DIR}"
+echo "Verified official-recipe UM-SEN outputs in ${OUTPUT_DIR}"
