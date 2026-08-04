@@ -38,7 +38,7 @@ cd "${REPO_ROOT}/spikformer/cifar10"
 
 for SEED in 42 43 44; do
   echo "Running official UM-SEN seed ${SEED} on gpu005"
-  python train.py \
+  python train_umsen.py \
     -c cifar10.yml \
     --umsen \
     --seed "${SEED}" \
