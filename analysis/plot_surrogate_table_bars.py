@@ -43,9 +43,9 @@ RESULTS = {
 }
 
 COLORS = {
-    "Fixed": "#4C78A8",
-    "Learnable": "#F58518",
-    "SAGE": "#54A24B",
+    "Fixed": "#D9D9D9",
+    "Learnable": "#969696",
+    "SAGE": "#525252",
 }
 
 
@@ -88,7 +88,7 @@ def plot_for_t(t_value: int, output_dir: Path, dpi: int) -> Path:
     for idx, method in enumerate(METHODS):
         offset = (idx - 1) * width
         values = RESULTS[t_value][method]
-        bars = ax.bar(
+        ax.bar(
             x + offset,
             values,
             width,
@@ -97,17 +97,7 @@ def plot_for_t(t_value: int, output_dir: Path, dpi: int) -> Path:
             edgecolor="black",
             linewidth=0.6,
         )
-        for bar, value in zip(bars, values):
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.35,
-                f"{value:.1f}" if value != 94.89 else "94.89",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
 
-    #ax.set_title(f"Surrogate-gradient comparison at T = {t_value}", pad=10)
     ax.set_ylabel("Top-1 accuracy (%)")
     ax.set_xticks(x)
     ax.set_xticklabels(DATASETS)
