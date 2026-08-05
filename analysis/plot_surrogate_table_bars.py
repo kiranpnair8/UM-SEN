@@ -23,7 +23,7 @@ RESULTS = {
     2: {
         "Fixed": [94.0, 76.3, 58.4],
         "Learnable": [94.4, 76.8, 58.8],
-        "SAGE": [95.0, 77.5, 59.4],
+        "SAGE": [94.4, 77.3, 59.4],
     },
     4: {
         "Fixed": [94.89, 77.9, 59.6],
@@ -32,13 +32,13 @@ RESULTS = {
     },
     8: {
         "Fixed": [95.1, 78.4, 60.0],
-        "Learnable": [95.4, 78.8, 60.4],
-        "SAGE": [95.8, 79.3, 60.8],
+        "Learnable": [95.1, 78.0, 59.4],
+        "SAGE": [94.8, 78.6, 60.3],
     },
     12: {
         "Fixed": [95.2, 78.6, 60.2],
-        "Learnable": [95.5, 79.0, 60.5],
-        "SAGE": [95.8, 79.4, 60.9],
+        "Learnable": [94.0, 79.0, 60.0],
+        "SAGE": [95.1, 79.1, 59.9],
     },
 }
 
@@ -107,7 +107,7 @@ def plot_for_t(t_value: int, output_dir: Path, dpi: int) -> Path:
                 fontsize=9,
             )
 
-    ax.set_title(f"Surrogate-gradient comparison at T = {t_value}", pad=10)
+    #ax.set_title(f"Surrogate-gradient comparison at T = {t_value}", pad=10)
     ax.set_ylabel("Top-1 accuracy (%)")
     ax.set_xticks(x)
     ax.set_xticklabels(DATASETS)
