@@ -37,14 +37,23 @@ python --version
 cd "${REPO_ROOT}/spikformer/cifar10"
 
 for SEED in 42 43 44; do
-  echo "Running official UM-SEN seed ${SEED} on gpu005"
+  EXPERIMENT="umsen_seed${SEED}"
+  EXP_DIR="${OUTPUT_DIR}/${EXPERIMENT}"
+  RESUME_ARGS=()
+  if [ -f "${EXP_DIR}/last.pth.tar" ]; then
+    RESUME_ARGS=(--resume "${EXP_DIR}/last.pth.tar")
+    echo "Running official UM-SEN seed ${SEED} on gpu005, resuming from ${EXP_DIR}/last.pth.tar"
+  else
+    echo "Running official UM-SEN seed ${SEED} on gpu005 from scratch"
+  fi
   python train_umsen.py \
     -c cifar10.yml \
     --umsen \
     --seed "${SEED}" \
     -data-dir "${DATA_DIR}" \
     --output "${OUTPUT_DIR}" \
-    --experiment "umsen_seed${SEED}"
+    --experiment "${EXPERIMENT}" \
+    "${RESUME_ARGS[@]}"
 done
 
 for SEED in 42 43 44; do
