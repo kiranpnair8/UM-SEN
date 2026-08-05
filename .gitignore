@@ -17,3 +17,5 @@ figures/
 
 # SLURM output logs
 slurm-*.out
+
+.cupy/
