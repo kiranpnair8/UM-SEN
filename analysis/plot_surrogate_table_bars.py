@@ -43,9 +43,9 @@ RESULTS = {
 }
 
 COLORS = {
-    "Fixed": "#D9D9D9",
-    "Learnable": "#969696",
-    "SAGE": "#525252",
+    "Fixed": "#C7E9C0",
+    "Learnable": "#74C476",
+    "SAGE": "#238B45",
 }
 
 
