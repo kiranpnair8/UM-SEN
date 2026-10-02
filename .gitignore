@@ -1,21 +1,26 @@
+# Runtime datasets, results, logs, and archived bulk artifacts
+data/
 logs/
-checkpoints/
 results/
+output/
+checkpoints/
+figures/
+/archive/cogmi2026/artifacts/
+
+# Model weights and checkpoints
 *.pth
+*.pth.tar
 *.pt
 *.ckpt
+*.safetensors
+
+# Runtime caches and logs
 *.log
 __pycache__/
-*.pyc
-.DS_Store
-# Local datasets and experiment outputs
-data/
-output/
-
-# Generated figures
-figures/
-
-# SLURM output logs
+*.py[cod]
+.pytest_cache/
+.cupy/
 slurm-*.out
 
-.cupy/
+# Desktop metadata
+.DS_Store

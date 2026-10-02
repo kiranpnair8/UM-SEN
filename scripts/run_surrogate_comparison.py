@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Historical CogMI-era script; not the SAGE-v2 / IJCNN 2027 pipeline.
+# See archive/cogmi2026/manifests/README.md from the repository root.
 """Run surrogate-gradient comparison experiments with existing trainers.
 
 This script is intentionally an orchestration layer. It calls the checked-in

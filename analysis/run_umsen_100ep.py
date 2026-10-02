@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Historical CogMI-era script; not the SAGE-v2 / IJCNN 2027 pipeline.
+# See archive/cogmi2026/manifests/README.md from the repository root.
 """Run the 100-epoch CIFAR-10 baseline vs UM-SEN benchmark."""
 
 import argparse

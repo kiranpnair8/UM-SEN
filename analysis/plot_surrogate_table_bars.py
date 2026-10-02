@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Historical CogMI-era script; not the SAGE-v2 / IJCNN 2027 pipeline.
+# See archive/cogmi2026/manifests/README.md from the repository root.
 """Generate five publication-quality bar plots from surrogate comparison table."""
 
 from __future__ import annotations

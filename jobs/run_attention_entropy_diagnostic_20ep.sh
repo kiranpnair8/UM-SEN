@@ -1,4 +1,6 @@
 #!/bin/bash
+# Historical CogMI-era script; not the SAGE-v2 / IJCNN 2027 pipeline.
+# See archive/cogmi2026/manifests/README.md from the repository root.
 #SBATCH --job-name=spikformer-attn-entropy-20ep
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1

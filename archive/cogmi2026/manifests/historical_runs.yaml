@@ -1,0 +1,88 @@
+schema_version: 1
+cycle: cogmi2026
+record_type: researcher_supplied_historical_inventory
+evidence_source: researcher_supplied_HPC_run_summaries
+filesystem_verified_in_this_workspace: false
+include_in_sage_v2_aggregates: false
+known_source_commit: e01d1db535548a1e8505ff805673569c98107449
+per_run_producing_source_verified: false
+hpc_repository_root: /home/rizk_lab/shared/kiran/UM-SEN
+accuracy_unit: percent
+epoch_numbering: as_reported
+notes:
+  - Historical CogMI-era experiments; no experiments were executed by this cleanup.
+  - Paths identify external HPC artifacts; no files were copied or fabricated.
+  - Exact HPC source, epochs executed, and checkpoint contents need independent verification.
+  - Historical metrics must not be automatically included in SAGE-v2 aggregates.
+runs:
+  - run_id: baseline_seed42
+    dataset: cifar10
+    method: Fixed-SG
+    recipe: official
+    seed: 42
+    reported_status: complete
+    reported_best_accuracy: 94.81
+    reported_best_epoch: 262
+    existing_relative_path: results/umsen_official_recipe/baseline_seed42
+    best_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed42/model_best.pth.tar
+    last_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed42/last.pth.tar
+    protected_external_historical_run: true
+    best_checkpoint_role: protected_historical_artifact_and_candidate_sage_v2_initialization
+  - run_id: baseline_seed43
+    dataset: cifar10
+    method: Fixed-SG
+    recipe: official
+    seed: 43
+    reported_status: complete
+    reported_best_accuracy: 94.93
+    reported_best_epoch: 300
+    existing_relative_path: results/umsen_official_recipe/baseline_seed43
+    best_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed43/model_best.pth.tar
+    last_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed43/last.pth.tar
+    protected_external_historical_run: true
+    best_checkpoint_role: protected_historical_artifact_and_candidate_sage_v2_initialization
+  - run_id: baseline_seed44
+    dataset: cifar10
+    method: Fixed-SG
+    recipe: official
+    seed: 44
+    reported_status: complete
+    reported_best_accuracy: 94.94
+    reported_best_epoch: 275
+    existing_relative_path: results/umsen_official_recipe/baseline_seed44
+    best_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed44/model_best.pth.tar
+    last_checkpoint_relative_path: results/umsen_official_recipe/baseline_seed44/last.pth.tar
+    protected_external_historical_run: true
+    best_checkpoint_role: protected_historical_artifact_and_candidate_sage_v2_initialization
+  - run_id: umsen_seed42
+    dataset: cifar10
+    method: SAGE
+    recipe: official
+    seed: 42
+    reported_status: complete
+    reported_best_accuracy: 94.83
+    reported_best_epoch: 299
+    existing_relative_path: results/umsen_official_recipe/umsen_seed42
+    protected_external_historical_run: true
+  - run_id: umsen_seed43
+    dataset: cifar10
+    method: SAGE
+    recipe: official
+    seed: 43
+    reported_status: complete
+    reported_best_accuracy: 95.10
+    reported_best_epoch: 283
+    existing_relative_path: results/umsen_official_recipe/umsen_seed43
+    protected_external_historical_run: true
+  - run_id: umsen_seed44
+    dataset: cifar10
+    method: SAGE
+    recipe: official
+    seed: 44
+    reported_status: INCOMPLETE
+    reported_best_accuracy: 90.98
+    reported_best_epoch: 79
+    reported_interruption_epoch: 83
+    interruption_phase: during_epoch
+    existing_relative_path: results/umsen_official_recipe/umsen_seed44
+    protected_external_historical_run: true
