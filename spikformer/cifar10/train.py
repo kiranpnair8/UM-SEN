@@ -23,6 +23,7 @@ import logging
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 from spikingjelly.clock_driven import functional
 
 import torch
@@ -40,6 +41,7 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
 import model
+import experiment_state
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -108,6 +110,18 @@ parser.add_argument('--pretrained', action='store_true', default=False,
                     help='Start with pretrained version of specified network (if avail)')
 parser.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH',
                     help='Initialize model from this checkpoint (default: none)')
+parser.add_argument('--init-checkpoint', default='', type=str,
+                    help='Weights-only initialization; fresh optimizer/scheduler/scaler and epoch 0')
+parser.add_argument('--init-use-ema', action='store_true',
+                    help='Explicitly select EMA weights for --init-checkpoint; otherwise never select EMA')
+parser.add_argument('--fixed-alpha', type=float, default=4.0,
+                    help='Transformer-block fixed sigmoid surrogate alpha (historical default: 4)')
+parser.add_argument('--sps-alpha', type=float, default=4.0,
+                    help='Separate SPS/input-stage surrogate alpha; not changed by --fixed-alpha')
+parser.add_argument('--deterministic', action='store_true',
+                    help='Paired seeded behavior; warn on unsupported deterministic torch operations')
+parser.add_argument('--sage-v2', action='store_true',
+                    help='Protect adaptation output namespace, including on resume')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='Resume full model and optimizer state from checkpoint (default: none)')
 parser.add_argument('--no-resume-opt', action='store_true', default=False,
@@ -305,13 +319,13 @@ def _parse_args():
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
     if args_config.config:
-        with open(args_config.config, 'r') as f:
-            cfg = yaml.safe_load(f)
-            parser.set_defaults(**cfg)
+        cfg, config_sources = experiment_state.load_config(args_config.config)
+        parser.set_defaults(**cfg)
 
     # The main arg parser parses the rest of the args, the usual
     # defaults will have been overridden if config file specified.
     args = parser.parse_args(remaining)
+    args.config_sources = config_sources if args_config.config else []
 
     # Cache the args as a text string to save them in the output dir later
     args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
@@ -321,6 +335,7 @@ def _parse_args():
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
+    experiment_state.validate_experiment_args(args)
 
     if args.log_wandb:
         if has_wandb:
@@ -365,6 +380,8 @@ def main():
                         "Install NVIDA apex or upgrade to PyTorch 1.6")
 
     random_seed(args.seed, args.rank)
+    if args.deterministic:
+        args.determinism_settings = experiment_state.configure_determinism(args.seed, args.rank)
     model = create_model(
         'spikformer',
         pretrained=False,
@@ -377,6 +394,18 @@ def main():
         depths=args.layer, sr_ratios=1,
         T=args.time_step
     )
+    experiment_state.apply_fixed_alpha(model, args.fixed_alpha, args.sps_alpha)
+    initialization = None
+    if args.init_checkpoint:
+        source_checkpoint = experiment_state.load_trusted_checkpoint(args.init_checkpoint)
+        initialization = experiment_state.source_provenance(args.init_checkpoint)
+        initialization.update(experiment_state.initialize_model(model, source_checkpoint, use_ema=args.init_use_ema))
+        del source_checkpoint
+        _logger.info('INITIALIZATION MODE; source checkpoint: %s; adaptation epoch: 0; '
+                     'optimizer: newly initialized; scheduler: newly initialized; scaler: newly initialized',
+                     args.init_checkpoint)
+        for key, value in initialization['source_metadata'].items():
+            _logger.info('source checkpoint %s: %s', key, value)
     print("Creating model")
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")
@@ -445,6 +474,9 @@ def main():
             _logger.info('AMP not enabled. Training in float32.')
 
     # optionally resume from a checkpoint
+    # Construct before optimizer restore: timm schedulers can initialize warmup LR.
+    if args.resume:
+        lr_scheduler, num_epochs = create_scheduler(args, optimizer)
     resume_epoch = None
     if args.resume:
         resume_epoch = resume_checkpoint(
@@ -477,14 +509,24 @@ def main():
         # NOTE: EMA model does not need to be wrapped by DDP
 
     # setup learning rate schedule and starting epoch
-    lr_scheduler, num_epochs = create_scheduler(args, optimizer)
+    if not args.resume:
+        lr_scheduler, num_epochs = create_scheduler(args, optimizer)
     start_epoch = 0
     if args.start_epoch is not None:
         # a specified start_epoch will always override the resume epoch
         start_epoch = args.start_epoch
     elif resume_epoch is not None:
         start_epoch = resume_epoch
-    if lr_scheduler is not None and start_epoch > 0:
+    continuation = {}
+    if args.resume:
+        checkpoint = experiment_state.load_trusted_checkpoint(args.resume)
+        continuation = experiment_state.restore_extra_state(
+            checkpoint, None if args.no_resume_opt else lr_scheduler,
+            experiment_state.controller_for(model))
+        del checkpoint
+    if lr_scheduler is not None and start_epoch > 0 and (
+            args.no_resume_opt or continuation.get('scheduler') is None):
+        # Legacy checkpoints have no scheduler state; preserve historical reconstruction.
         lr_scheduler.step(start_epoch)
 
     if args.local_rank == 0:
@@ -546,7 +588,9 @@ def main():
         distributed=args.distributed,
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
-        use_multi_epochs_loader=args.use_multi_epochs_loader
+        use_multi_epochs_loader=args.use_multi_epochs_loader,
+        generator=torch.Generator().manual_seed(args.seed + args.rank) if args.deterministic else None,
+        persistent_workers=not args.deterministic and args.workers > 0
     )
 
     loader_eval = create_loader(
@@ -562,6 +606,8 @@ def main():
         distributed=args.distributed,
         crop_pct=data_config['crop_pct'],
         pin_memory=args.pin_mem,
+        generator=torch.Generator().manual_seed(args.seed + args.rank + 1) if args.deterministic else None,
+        persistent_workers=not args.deterministic and args.workers > 0,
     )
 
     # setup loss function
@@ -581,6 +627,9 @@ def main():
     eval_metric = args.eval_metric
     best_metric = None
     best_epoch = None
+    if continuation:
+        best_metric = continuation.get('best_metric')
+        best_epoch = continuation.get('best_epoch')
     saver = None
     output_dir = None
     if args.rank == 0:
@@ -592,13 +641,36 @@ def main():
                 safe_model_name(args.model),
                 str(data_config['input_size'][-1])
             ])
+        if args.sage_v2:
+            expected_output = experiment_state.safe_output_path(args.output, exp_name)
+            if expected_output.exists() and any(expected_output.iterdir()) and not args.resume:
+                raise ValueError('Refusing to overwrite an existing SAGE-v2 run; resume or use a new run ID')
+            if args.resume and Path(args.resume).resolve().parent != expected_output:
+                raise ValueError('SAGE-v2 resume checkpoint must belong to the requested run directory')
         output_dir = get_outdir(args.output if args.output else './output/train', exp_name)
         decreasing = True if eval_metric == 'loss' else False
-        saver = CheckpointSaver(
+        raw_loaders = [getattr(loader, 'loader', loader) for loader in (loader_train, loader_eval)]
+        rng_loaders = [loader for loader in raw_loaders if loader.generator is not None]
+        provenance = None
+        if args.sage_v2:
+            provenance = experiment_state.write_provenance(
+                args, output_dir, initialization, continuation.get('provenance'))
+        saver_type = experiment_state.state_saver_class(CheckpointSaver)
+        saver = saver_type(
             model=model, optimizer=optimizer, args=args, model_ema=model_ema, amp_scaler=loss_scaler,
-            checkpoint_dir=output_dir, recovery_dir=output_dir, decreasing=decreasing, max_history=args.checkpoint_hist)
+            checkpoint_dir=output_dir, recovery_dir=output_dir, decreasing=decreasing, max_history=args.checkpoint_hist,
+            scheduler=lr_scheduler, loaders=rng_loaders, provenance=provenance)
+        saver.best_metric, saver.best_epoch = best_metric, best_epoch
+        args_text = yaml.safe_dump(vars(args), default_flow_style=False)
         with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
             f.write(args_text)
+
+    if args.resume and continuation.get('rng') is not None:
+        if args.distributed:
+            _logger.warning('Distributed RNG resume is not exact; per-rank state is not checkpointed')
+        else:
+            raw_loaders = [getattr(loader, 'loader', loader) for loader in (loader_train, loader_eval)]
+            experiment_state.restore_rng(continuation['rng'], [loader for loader in raw_loaders if loader.generator is not None])
 
     try:
         for epoch in range(start_epoch, num_epochs):

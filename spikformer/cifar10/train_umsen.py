@@ -10,6 +10,7 @@ import torch
 from spikingjelly.clock_driven.neuron import MultiStepLIFNode
 
 import train as official_train
+from experiment_state import snapshot_fields, restore_fields
 
 
 STATE = {
@@ -55,6 +56,13 @@ def summarize(values):
 
 
 class BlockController:
+    STATE_FIELDS = (
+        "block_id", "beta", "temperature", "alpha_min", "alpha_max", "raw_dispersion",
+        "ema_dispersion", "normalized_z", "centered_z", "alpha", "applied_alpha",
+        "initialized", "running_count", "running_mean", "running_m2", "raw_history",
+        "ema_history", "z_history", "centered_z_history", "alpha_history", "applied_alpha_history",
+    )
+
     def __init__(self, block_id, args):
         self.block_id = block_id
         self.beta = args.umsen_ema_beta
@@ -66,6 +74,7 @@ class BlockController:
         self.normalized_z = 0.0
         self.centered_z = 0.0
         self.alpha = 4.0
+        self.applied_alpha = 4.0
         self.initialized = False
         self.running_count = 0
         self.running_mean = 0.0
@@ -75,6 +84,15 @@ class BlockController:
         self.z_history = []
         self.centered_z_history = []
         self.alpha_history = []
+        self.applied_alpha_history = []
+
+    def state_dict(self):
+        return snapshot_fields(self, self.STATE_FIELDS)
+
+    def load_state_dict(self, state):
+        if state.get("block_id") != self.block_id:
+            raise ValueError("Controller block identity mismatch")
+        restore_fields(self, state, self.STATE_FIELDS)
 
     def observe(self, attn):
         with torch.no_grad():
@@ -123,11 +141,14 @@ class BlockController:
             "normalized_z": summarize(self.z_history),
             "centered_z": summarize(self.centered_z_history),
             "alpha": summarize(self.alpha_history),
+            "candidate_alpha": summarize(self.alpha_history),
+            "applied_alpha": summarize(self.applied_alpha_history),
         }
 
     def current(self):
         return {
-            "applied_alpha": float(self.alpha),
+            "applied_alpha": float(self.applied_alpha),
+            "candidate_alpha": float(self.alpha),
             "raw_entropy_dispersion": float(self.raw_dispersion),
             "ema_entropy_dispersion": float(self.ema_dispersion),
             "running_mean": float(self.running_mean),
@@ -141,6 +162,7 @@ class BlockController:
         self.z_history.clear()
         self.centered_z_history.clear()
         self.alpha_history.clear()
+        self.applied_alpha_history.clear()
 
 
 class UMSENController:
@@ -156,7 +178,26 @@ class UMSENController:
         self.history = []
         self.install_attention_hooks()
         self.wrap_forward()
-        self.apply_step_alphas()
+        self.apply_step_alphas(record=False)
+
+    def state_dict(self):
+        state = {
+            "version": 1, "step": self.step, "current_epoch": self.current_epoch,
+            "warmup_steps": self.warmup_steps, "history": self.history,
+            "blocks": [controller.state_dict() for controller in self.controllers],
+        }
+        return snapshot_fields(types.SimpleNamespace(**state), tuple(state))
+
+    def load_state_dict(self, state):
+        if state.get("version") != 1 or len(state["blocks"]) != len(self.controllers):
+            raise ValueError("Unsupported controller version or block count")
+        restore_fields(self, state, ("step", "current_epoch", "warmup_steps", "history"))
+        for block, controller, saved in zip(self.model.block, self.controllers, state["blocks"]):
+            controller.load_state_dict(saved)
+            set_surrogate_alpha(block, controller.applied_alpha)
+
+    def warmup_active(self):
+        return self.current_epoch == 0 or self.step < self.warmup_steps
 
     def install_attention_hooks(self):
         for idx, block in enumerate(getattr(self.model, "block")):
@@ -190,13 +231,16 @@ class UMSENController:
             controller.clear_epoch_history()
 
     def current_alphas(self):
-        if self.current_epoch == 0 or self.step < self.warmup_steps:
+        if self.warmup_active():
             return [4.0 for _ in self.controllers]
         return [controller.alpha for controller in self.controllers]
 
-    def apply_step_alphas(self):
-        for block, alpha in zip(getattr(self.model, "block"), self.current_alphas()):
+    def apply_step_alphas(self, record=True):
+        for block, controller, alpha in zip(getattr(self.model, "block"), self.controllers, self.current_alphas()):
             set_surrogate_alpha(block, alpha)
+            controller.applied_alpha = float(alpha)
+            if record:
+                controller.applied_alpha_history.append(float(alpha))
 
     def update_centered_alphas(self):
         z_values = [controller.normalized_z for controller in self.controllers]
@@ -211,6 +255,9 @@ class UMSENController:
         record = {
             "epoch": int(epoch),
             "step": int(self.step),
+            "warmup_active": self.warmup_active(),
+            "warmup_epoch": self.current_epoch == 0,
+            "warmup_step_requirement_met": self.step >= self.warmup_steps,
             "blocks": {
                 str(controller.block_id): controller.epoch_summary()
                 for controller in self.controllers
@@ -243,8 +290,10 @@ def parse_args_with_umsen():
 def create_model_with_umsen(*args, **kwargs):
     model = ORIGINAL_CREATE_MODEL(*args, **kwargs)
     parsed_args = STATE["args"]
+    STATE["controller"] = None
     if parsed_args is not None and parsed_args.umsen:
         STATE["controller"] = UMSENController(model, parsed_args)
+        model._sage_controller = STATE["controller"]
     return model
 
 

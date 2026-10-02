@@ -1,0 +1,14 @@
+# Development pilot, not a validated final SAGE-v2 training strategy.
+base_config: ../../spikformer/cifar10/cifar10.yml
+sage_v2: true
+deterministic: true
+fixed_alpha: 4.0
+sps_alpha: 4.0
+seed: 42
+time_step: 4
+epochs: 30
+lr: 1.0e-5
+min_lr: 1.0e-7
+sched: cosine
+warmup_epochs: 0
+cooldown_epochs: 0

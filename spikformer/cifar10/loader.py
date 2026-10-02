@@ -176,6 +176,7 @@ def create_loader(
         use_multi_epochs_loader=False,
         persistent_workers=True,
         worker_seeding='all',
+        generator=None,
 ):
     re_num_splits = 0
     if re_split:
@@ -236,6 +237,8 @@ def create_loader(
         worker_init_fn=partial(_worker_init, worker_seeding=worker_seeding),
         persistent_workers=persistent_workers
     )
+    if generator is not None:
+        loader_args['generator'] = generator
     try:
         loader = loader_class(dataset, **loader_args)
     except TypeError as e:
