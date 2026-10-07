@@ -1,0 +1,33 @@
+# Follows the authors' released-code recipe, not every paper hyperparameter.
+# Paper Section 4.2: LR=0.1; released trainer default retained here: LR=0.001.
+# Paper describes learnable SSA scaling; released model retains fixed scale=0.25.
+# SSA scale is defined in model.py, not a configuration override or entropy temperature.
+# res_lif is registered but unused; only executed block LIF nodes affect training.
+# T=10 and seed=42 are deliberate overrides of released T=16 and seed=2021.
+# Total epochs here include the legacy scheduler's 10 cooldown epochs.
+model: spikformer
+dataset: cifar10dvs
+num_classes: 10
+data_path: data/CIFAR10DVS
+device: cuda:0
+T: 10
+seed: 42
+epochs: 106
+batch_size: 16
+workers: 4
+opt: adamw
+lr: 0.001
+weight_decay: 0.06
+opt_eps: 0.00000001
+sched: cosine
+warmup_epochs: 10
+cooldown_epochs: 10
+warmup_lr: 0.00001
+min_lr: 0.00001
+mixup: 0.5
+mixup_prob: 0.5
+mixup_mode: batch
+cutmix: 0.0
+smoothing: 0.1
+amp: true
+output_dir: results/sage_v2/cifar10dvs

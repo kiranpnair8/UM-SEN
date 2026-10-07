@@ -29,6 +29,7 @@ class StateObject:
 @pytest.fixture
 def controllers(monkeypatch):
     # Import the real controller classes without importing the GPU trainer.
+    monkeypatch.delitem(sys.modules, "sage_controller", raising=False)
     trainer = types.ModuleType("train")
     trainer.parser = argparse.ArgumentParser()
     for name in ("_parse_args", "create_model", "train_one_epoch"):
@@ -50,7 +51,10 @@ def controllers(monkeypatch):
     spec = importlib.util.spec_from_file_location("controller_under_test", CIFAR / "train_umsen.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module, LIF
+    try:
+        yield module, LIF
+    finally:
+        sys.modules.pop("sage_controller", None)
 
 
 def controller_model(LIF):

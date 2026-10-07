@@ -65,6 +65,10 @@ class SSA(nn.Module):
         self.proj_bn = nn.BatchNorm1d(dim)
         self.proj_lif = MultiStepLIFNode(tau=2.0, detach_reset=True, backend='cupy')
 
+    def _record_attention_entropy(self, attn):
+        """No-op unless the optional SAGE controller installs its observer."""
+        pass
+
     def forward(self, x):
         T, B, C, N = x.shape
         x_for_qkv = x.flatten(0, 1)
@@ -84,6 +88,7 @@ class SSA(nn.Module):
         v = v_conv_out.transpose(-1, -2).reshape(T, B, N, self.num_heads, C//self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         attn = (q @ k.transpose(-2, -1))
+        self._record_attention_entropy(attn)
         x = (attn @ v) * self.scale
 
         x = x.transpose(3, 4).reshape(T, B, C, N).contiguous()
