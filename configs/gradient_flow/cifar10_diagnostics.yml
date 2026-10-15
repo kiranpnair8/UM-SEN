@@ -1,0 +1,15 @@
+# Passive diagnostics; no SAGE or adaptive controller. Paths are repo-relative.
+base_config: ../../spikformer/cifar10/cifar10.yml
+data_dir: data
+output: results/gradient_flow
+experiment: cifar10_diagnostic_seed42
+seed: 42
+deterministic: true
+fixed_alpha: 4.0
+sps_alpha: 4.0
+model_ema: false
+diagnostic_beta: 0.95
+diagnostic_eps: 1.0e-12
+diagnostic_max_batches: 3
+diagnostic_max_epochs: 1
+# Preserve the inherited full LR schedule, even for the short diagnostic budget.

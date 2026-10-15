@@ -117,6 +117,7 @@ def test_real_t10_forward_backward_baseline_equivalence(monkeypatch):
     real_lif = neuron.MultiStepLIFNode
     spec = importlib.util.spec_from_file_location("dvs_model_torch_test", DVS / "model.py")
     model_module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, model_module)
     spec.loader.exec_module(model_module)
     def torch_lif(*args, **kwargs):
         kwargs["backend"] = "torch"

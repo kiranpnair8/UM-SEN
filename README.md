@@ -7,9 +7,9 @@ Two parallel research tracks share the existing implementations in `spikformer/`
 | SAGE | `configs/sage_v2/` | `experiments/sage_v2/` | Existing historical material in `analysis/` | `jobs/sage_v2/` |
 | Gradient-flow research | `configs/gradient_flow/` | `experiments/gradient_flow/` | `analysis/gradient_flow/` | `jobs/gradient_flow/` |
 
-The gradient-flow track currently contains documentation only. No diagnostic,
-surrogate controller, new training strategy, or completed result is implemented
-or implied by these directories.
+The gradient-flow track contains passive block-gradient diagnostics and controlled
+alpha interventions. It does not implement an adaptive controller. Synthetic CPU
+smoke tests are correctness checks, not completed CIFAR accuracy experiments.
 
 Generated checkpoints, logs, results and figures use the corresponding ignored
 `<kind>/<track>/` directories. Existing jobs may keep checkpoints inside their

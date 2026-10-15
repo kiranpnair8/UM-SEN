@@ -1,7 +1,18 @@
 # Gradient-Flow Analysis
 
-Reserved for future gradient-flow analysis and visualization source. No plotting
-or diagnostic implementation is added in this organization pass.
+`plot_diagnostics.py` plots block-by-epoch heatmaps and per-block temporal curves
+for gradient transmission, directional consistency, parameter-gradient L2 norm
+and firing rate. It also renders finite-difference response matrices. It exports
+300-DPI PNG and PDF files and masks missing/invalid observations.
+
+```bash
+python -m analysis.gradient_flow.plot_diagnostics \
+  --metrics results/gradient_flow/cifar10_diagnostic_seed42/epochs.json \
+  --output-dir figures/gradient_flow/cifar10_diagnostic_seed42
+```
+
+Epoch metrics are means over valid step observations, with explicit counts; the
+plotter does not pool datasets, checkpoints or research tracks automatically.
 
 Future analysis must explicitly select `results/gradient_flow/`, verify run
 identity/completion, and write generated figures to `figures/gradient_flow/`.
