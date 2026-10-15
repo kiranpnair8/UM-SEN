@@ -1,6 +1,7 @@
 # Runtime datasets, results, logs, and archived bulk artifacts
 data/
 logs/
+old_logs/
 results/
 output/
 checkpoints/
