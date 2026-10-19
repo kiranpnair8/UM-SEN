@@ -1,5 +1,8 @@
 # Gradient-Flow Research
 
+See [training-state characterization](TRAINING_STATES.md) for the audited,
+same-trajectory early/mid/late experiment and gpu006 launcher (no controller).
+
 See [multi-batch causal validation](MULTIBATCH.md) for the fixed-checkpoint,
 25-batch SAGE evaluation protocol, resume rules, statistics, and Lawrence launcher.
 
