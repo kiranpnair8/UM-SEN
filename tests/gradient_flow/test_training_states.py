@@ -13,7 +13,7 @@ pytest.importorskip("spikingjelly.clock_driven.functional")
 
 from experiments.gradient_flow.common import ROOT, build_model, load_config
 from experiments.gradient_flow.checkpoint_stages import (STAGES, audit, checkpoint_epoch, choose_stages,
-    assess_historical, recipe_signature, scheduled_epochs, validate_baseline)
+    assess_historical, normalize_training_recipe, recipe_signature, scheduled_epochs, validate_baseline)
 from experiments.gradient_flow.intervene import same_state
 from experiments.gradient_flow.multi_batch_intervene import digest_file
 from experiments.gradient_flow.multi_batch_stats import aggregate_measurements
@@ -196,7 +196,7 @@ def test_prepare_reuses_complete_historical_run_without_training(tmp_path, monke
         stages.prepare(tmp_path / "historical", tmp_path / "conflict", "unused", regenerate=True)
 
 
-@pytest.mark.parametrize("late_evidence", ["provenance_only", "missing_metadata", "matching"])
+@pytest.mark.parametrize("late_evidence", ["provenance_only", "missing_metadata", "matching", "runtime_normalization"])
 def test_lawrence_partial_collection_regenerates_complete_trajectory(tmp_path, monkeypatch, late_evidence):
     """Synthetic reproduction of the reported file collection, not real HPC metadata."""
     import yaml
@@ -204,18 +204,22 @@ def test_lawrence_partial_collection_regenerates_complete_trajectory(tmp_path, m
     manifest = synthetic_states(tmp_path / "historical")
     historical = tmp_path / "historical"
     recipe = dict(manifest["recipe"], cooldown_epochs=10, mixup=.5)
+    if late_evidence == "runtime_normalization":
+        recipe.update(amp=True, native_amp=False, apex_amp=False, no_prefetcher=False)
     (historical / "args.yaml").write_text(yaml.safe_dump(recipe))
     for p in historical.glob("*.pth.tar"):
         p.unlink()
     for epoch in (262, 283, 288, 295, 296, 298, 299, 305, 306, 308, 309):
         args = dict(recipe)
+        if late_evidence == "runtime_normalization":
+            args.update(native_amp=True, prefetcher=True)
         if epoch == 309 and late_evidence == "provenance_only":
             args["git_commit"] = "historical-source-unknown-to-args-yaml"
         if epoch == 309 and late_evidence == "missing_metadata":
             args.pop("mixup")
         name = "last.pth.tar" if epoch == 309 else f"checkpoint-{epoch}.pth.tar"
         torch.save(dict(state_dict={"synthetic": torch.tensor(float(epoch))}, args=Namespace(**args),
-                        epoch=epoch, version=2, arch="spikformer", optimizer={}, metric=0.), historical / name)
+                        epoch=epoch, version=2, arch="spikformer", optimizer={}, amp_scaler={}, metric=0.), historical / name)
     import shutil
     shutil.copyfile(historical / "checkpoint-262.pth.tar", historical / "model_best.pth.tar")
     before = {p.name: digest_file(p) for p in historical.iterdir()}
@@ -240,7 +244,8 @@ def test_lawrence_partial_collection_regenerates_complete_trajectory(tmp_path, m
     assert len(calls) == 1
     assert result["origin"] == "regenerated" and result["source_mode"] == "regenerated_complete_trajectory"
     assert result["historical_rejection_reason"]["missing_states"] == [20, 150]
-    assert result["historical_rejection_reason"]["incompatible_target_epochs"] == ([] if late_evidence == "matching" else [309])
+    assert result["historical_rejection_reason"]["incompatible_target_epochs"] == (
+        [] if late_evidence in ("matching", "runtime_normalization") else [309])
     assert {e["logical_epoch"] for e in result["states"].values()} == {20, 150, 309}
     assert len({e["sha256"] for e in result["states"].values()}) == 3
     assert {e["trajectory_id"] for e in result["states"].values()} == {result["trajectory_id"]}
@@ -255,9 +260,22 @@ def test_lawrence_partial_collection_regenerates_complete_trajectory(tmp_path, m
     late = next(c for c in assessment["checkpoint_diagnoses"] if c["epoch"] == 309)
     assert Path(late["path"]).name == "last.pth.tar" and late["raw_epoch"] == 309 and late["version"] == 2
     assert assessment["epoch_numbering"]["scheduled_epoch_count"] == 310
-    if late_evidence != "matching":
+    if late_evidence in ("provenance_only", "missing_metadata"):
         assert late["recipe_differences"]
         assert result["historical_rejection_reason"]["checkpoint_conflicts"]
+    if late_evidence == "runtime_normalization":
+        assert assessment["checkpoint_recipes_identical"]
+        assert assessment["complete_regeneration_selected"]
+        assert not late["recipe_differences"]
+        assert {d["field"] for d in late["source_recipe_differences"]} == {"native_amp", "prefetcher"}
+        assert set(assessment["runtime_normalization"]["applied_rules"]) == {"native_amp", "prefetcher"}
+        assert assessment["source_recipe"]["native_amp"] is False and "prefetcher" not in assessment["source_recipe"]
+        assert assessment["regeneration_effective_recipe"]["native_amp"] is True
+        assert assessment["regeneration_effective_recipe"]["prefetcher"] is True
+        assert assessment["regeneration_effective_recipe"]["amp"] is True
+        assert assessment["regeneration_effective_recipe"]["no_prefetcher"] is False
+        settings = yaml.safe_load((tmp_path / "study/regeneration.yml").read_text())
+        assert settings["native_amp"] is True and settings["prefetcher"] is True
     # A restart skips training and keeps exactly the same primary checkpoint identities.
     assert stages.prepare(historical, tmp_path / "study", "unused", regenerate=True) == result
     assert len(calls) == 1
@@ -286,6 +304,74 @@ def test_internally_conflicting_recipe_still_blocks_regeneration(tmp_path, monke
     assert report["internal_conflicts"][0]["conflicts"][0]["field"] == field
     assert not (tmp_path / "study/trajectory_plan.json").exists()
     assert {p.name: digest_file(p) for p in historical.iterdir()} == before
+
+
+def runtime_recipe_fixture():
+    source = dict(model="spikformer", amp=True, native_amp=False, apex_amp=False, no_prefetcher=False, lr=.0005)
+    checkpoints = [dict(path=name, args=dict(source, native_amp=True, prefetcher=True), scaler_keys=["amp_scaler"])
+                   for name in ("checkpoint-262.pth.tar", "checkpoint-299.pth.tar", "last.pth.tar", "model_best.pth.tar")]
+    return source, checkpoints
+
+
+def test_verified_runtime_recipe_resolution_preserves_source_and_full_recipe():
+    source, checkpoints = runtime_recipe_fixture()
+    before = copy.deepcopy((source, checkpoints))
+    result = normalize_training_recipe(source, checkpoints)
+    assert not result["errors"]
+    assert result["effective_recipe"] == dict(source, native_amp=True, prefetcher=True)
+    assert (source, checkpoints) == before
+    for field, rule in result["applied_rules"].items():
+        assert "e01d1db535548a1e8505ff805673569c98107449" in rule["evidence"]
+        assert rule["effective_runtime"] is True and len(rule["checkpoints"]) == 4
+        assert all(c["args"][field] is True for c in checkpoints)
+    assert result["applied_rules"]["native_amp"]["args_yaml"] is False
+    assert not result["applied_rules"]["prefetcher"]["args_yaml_present"]
+    assert len({json.dumps(recipe_signature(c["args"]), sort_keys=True) for c in checkpoints}) == 1
+
+
+@pytest.mark.parametrize("field", ["native_amp", "prefetcher"])
+def test_runtime_checkpoint_disagreement_fails(field):
+    source, checkpoints = runtime_recipe_fixture()
+    checkpoints[0]["args"][field] = False
+    result = normalize_training_recipe(source, checkpoints)
+    assert any(e["field"] == field and "unanimous" in e["reason"] for e in result["errors"])
+    assessment = assess_historical(dict(checkpoints=checkpoints), source, [20, 150, 309])
+    assert not assessment["recipe_unambiguous"]
+
+
+@pytest.mark.parametrize("bad_evidence", ["amp_disabled", "apex_requested", "scaler_missing", "no_rule", "wrong_prefetcher"])
+def test_runtime_discrepancy_without_verified_evidence_fails(monkeypatch, bad_evidence):
+    import experiments.gradient_flow.checkpoint_stages as stages
+    source, checkpoints = runtime_recipe_fixture()
+    if bad_evidence == "amp_disabled":
+        source["amp"] = False
+        for c in checkpoints:
+            c["args"]["amp"] = False
+    elif bad_evidence == "apex_requested":
+        source["apex_amp"] = True
+        for c in checkpoints:
+            c["args"]["apex_amp"] = True
+    elif bad_evidence == "scaler_missing":
+        checkpoints[0]["scaler_keys"] = []
+    elif bad_evidence == "no_rule":
+        monkeypatch.setattr(stages, "RUNTIME_RESOLUTION_EVIDENCE", {})
+    else:
+        for c in checkpoints:
+            c["args"]["no_prefetcher"] = True
+    result = normalize_training_recipe(source, checkpoints)
+    assert result["errors"]
+    assert not assess_historical(dict(checkpoints=checkpoints), source, [20, 150, 309])["recipe_unambiguous"]
+
+
+def test_valid_runtime_normalization_does_not_mask_other_recipe_conflicts():
+    source, checkpoints = runtime_recipe_fixture()
+    checkpoints[0]["args"]["lr"] = .1
+    assessment = assess_historical(dict(checkpoints=checkpoints), source, [20, 150, 309])
+    assert set(assessment["runtime_normalization"]["applied_rules"]) == {"native_amp", "prefetcher"}
+    assert not assessment["runtime_normalization"]["errors"]
+    assert not assessment["recipe_unambiguous"]
+    assert not assessment["checkpoint_recipes_identical"]
+    assert assessment["internal_conflicts"][0]["conflicts"][0]["field"] == "lr"
 
 
 def test_assessment_epoch_filename_and_duplicate_selection(tmp_path):

@@ -8,12 +8,13 @@ All probe mechanics and G remain in the existing intervention/multi-batch engine
 
 The local workspace inspected for this implementation does NOT contain
 `results/umsen_official_recipe/baseline_seed42/`. Its HPC-only checkpoints,
-`args.yaml`, summaries and provenance could not be inspected locally. The exact
-checkpoint metadata therefore remains unverified here. The Lawrence report
-supplied after implementation lists 12 historical files, no epoch20/150 files,
-and a rejected logical epoch309 candidate. Therefore that collection cannot supply
-the primary trio. The report does NOT identify which physical file or metadata
-field caused rejection; those are not inferred from the filenames.
+`args.yaml`, summaries and provenance could not be inspected directly locally.
+The subsequent Lawrence report identifies 12 files, no epoch20/150 checkpoints,
+and `last.pth.tar` as logical epoch309 (raw_epoch309, version2). It reports only
+two source/runtime differences across ALL checkpoints: `native_amp=False` in
+YAML versus True in checkpoints, and absent YAML `prefetcher` versus True in
+checkpoints. That evidence is supplied by the user, not an independent local
+inspection of HPC files. The runtime audit verifies it against all available files.
 No missing checkpoint is fabricated, inferred from a filename, or interpolated.
 
 `checkpoint_stages.py` inventories actual checkpoint dictionaries recursively,
@@ -45,12 +46,57 @@ present. Different state paths/hashes are mandatory. `model_best` is eligible ON
 if its actual completed epoch matches the requested target; it is never a fallback
 for final. Legacy same-directory provenance is evidence of one run, not a
 cryptographic proof of initial weights/data order; this limitation is recorded.
-Exact full recipe matching remains required for reuse: no defaults are silently
-filled and no mismatched historical state is accepted.
+Exact full EFFECTIVE recipe matching remains required for reuse. Source/runtime
+resolution is limited to the demonstrated rules below; no arbitrary defaults are
+silently filled and no mismatched effective historical state is accepted.
+
+## Historical Source Versus Effective Runtime Arguments
+
+Code inspected at historical commit `e01d1db535548a1e8505ff805673569c98107449`
+demonstrates the cause in `spikformer/cifar10/train.py`:
+
+1. `--native-amp` defaults to False. YAML defaults are loaded first and explicit
+   CLI options are parsed afterward. The CIFAR recipe sets `amp: True`.
+2. `_parse_args()` serializes `args_text` immediately, before runtime setup.
+3. `main()` sets `args.prefetcher = not args.no_prefetcher`; `--no-prefetcher`
+   defaults to False. There is no separate `--prefetcher` parser option. The
+   derived value chooses FastCollateMixup and is passed to both loaders; the
+   local loader wraps a PrefetchLoader when True. It is not device/augmentation
+   inference performed by timm after the fact.
+4. With `args.amp` and native autocast available, `main()` sets
+   `args.native_amp=True`, selects native autocast and creates NativeScaler
+   (unless Apex takes precedence). Thus source `native_amp=False` does NOT mean
+   training was FP32. Native AMP is selected by local setup, not a timm mutation.
+5. Historical `args.yaml` writes the EARLIER cached text. CheckpointSaver holds
+   the runtime `args` object and saves it directly as `checkpoint['args']`.
+   Scaler state is saved separately under `amp_scaler`; the scaler does not
+   synthesize or mutate the `native_amp` argument.
+
+This serialization timing exactly explains the supplied Lawrence pair. The
+current trainer already reserializes runtime args immediately before writing
+`args.yaml`; this task does not change that trainer or the historical files.
+The historical launcher at the cited commit uses `-c cifar10.yml` but had already
+been switched to UM-SEN; it is not claimed to be the exact original Fixed launch.
+
+`normalize_training_recipe()` keeps the raw source recipe and ALL per-checkpoint
+observations. It requires unanimous boolean runtime values, with no mixture of
+present/missing fields. Native-AMP promotion is accepted ONLY with source
+`amp=True`, source native request False/absent, no Apex request, corresponding
+runtime flags, and `amp_scaler` in EVERY readable checkpoint. Prefetcher resolution
+must match `not no_prefetcher` in both source and every checkpoint, using only the
+verified False parser default if `no_prefetcher` is absent. No other field has a
+resolution rule; unsupported patterns, missing evidence or disagreements abort.
+
+The assessment saves raw source fields, runtime observations, applied rules and
+code evidence, effective recipe, raw AND effective per-checkpoint differences,
+checkpoint recipe hashes/consensus, and the regeneration decision/recipe. The
+supplied four representative files (checkpoint262, checkpoint299, last, best)
+and every other available file are checked, not just a hand-picked subset.
 
 ## Recipe Ambiguity Versus Incomplete Evidence
 
-The audit compares ALL readable historical checkpoint arguments to `args.yaml`,
+The audit compares ALL readable historical checkpoint arguments to the verified
+effective recipe derived from `args.yaml`,
 not just target checkpoints. Contradictory shared scientific fields (seed, LR,
 architecture, schedule, augmentation, alpha, etc.), extra scientific arguments
 missing from `args.yaml`, conflicting `arch`, or a saved controller make the

@@ -27,6 +27,14 @@ OPERATIONAL.update(("log_interval", "checkpoint_hist", "recovery_interval"))
 # These describe provenance, never a training hyperparameter. They still count
 # against exact historical selection; only recipe reconstruction treats them separately.
 PROVENANCE_FIELDS = {"git_commit", "git_sha", "source_commit", "commit", "provenance"}
+RUNTIME_RESOLUTION_EVIDENCE = {
+    "native_amp": "e01d1db535548a1e8505ff805673569c98107449:spikformer/cifar10/train.py "
+        "_parse_args caches args_text before main promotes amp to native_amp when native autocast exists; "
+        "main selects NativeScaler; timm CheckpointSaver._save serializes runtime args and amp_scaler separately",
+    "prefetcher": "e01d1db535548a1e8505ff805673569c98107449:spikformer/cifar10/train.py "
+        "main assigns args.prefetcher = not args.no_prefetcher after _parse_args caches args_text; "
+        "no_prefetcher parser default is False; create_loader receives use_prefetcher=args.prefetcher",
+}
 
 
 def args_dict(value):
@@ -145,8 +153,61 @@ def recipe_differences(expected, actual):
     return differences
 
 
+def normalize_training_recipe(source, checkpoints):
+    """Resolve only demonstrated post-parse mutations, never arbitrary mismatches."""
+    effective, applied, errors, observations = dict(source), {}, [], {}
+    readable = [c for c in checkpoints if "error" not in c]
+    for field in ("native_amp", "prefetcher"):
+        values = [dict(path=c["path"], present=field in c["args"], value=c["args"].get(field)) for c in readable]
+        observations[field] = values
+        present = [v for v in values if v["present"]]
+        if not present:
+            continue
+        if (len(present) != len(values) or any(type(v["value"]) is not bool for v in present) or
+                any(v["value"] != present[0]["value"] for v in present)):
+            errors.append(dict(field=field, reason="Checkpoint runtime values lack unanimous boolean evidence", observations=values))
+            continue
+        runtime = present[0]["value"]
+        if field == "prefetcher" and any(type(c["args"].get("no_prefetcher", False)) is not bool or
+                runtime != (not c["args"].get("no_prefetcher", False)) for c in readable):
+            errors.append(dict(field=field, reason="Checkpoint prefetcher contradicts its own no_prefetcher argument"))
+            continue
+        if field in source and type(source[field]) is bool and source[field] == runtime:
+            continue
+        evidence = RUNTIME_RESOLUTION_EVIDENCE.get(field)
+        if not evidence:
+            errors.append(dict(field=field, reason="No explicit verified runtime-normalization rule"))
+            continue
+        if field == "native_amp":
+            # A scaler does not mutate args. It corroborates actual native-AMP use,
+            # rather than treating a request flag alone as proof of mixed precision.
+            verified = (source.get("native_amp", False) is False and source.get("amp") is True and
+                source.get("apex_amp", False) is False and runtime is True and all(
+                    c["args"].get("amp") is True and c["args"].get("apex_amp", False) is False and
+                    "amp_scaler" in c.get("scaler_keys", []) for c in readable))
+            reason = "--amp promoted to native AMP; unanimous runtime args plus native scaler state"
+        else:
+            verified = (type(source.get("no_prefetcher", False)) is bool and
+                runtime == (not source.get("no_prefetcher", False)) and all(
+                    type(c["args"].get("no_prefetcher", False)) is bool and
+                    c["args"].get("no_prefetcher", False) == source.get("no_prefetcher", False) for c in readable))
+            reason = "prefetcher = not no_prefetcher; verified parser default no_prefetcher=False"
+        if not verified:
+            errors.append(dict(field=field, reason="Source/runtime discrepancy does not satisfy verified resolution rule", evidence=evidence))
+            continue
+        effective[field] = runtime
+        applied[field] = dict(args_yaml_present=field in source, args_yaml=source.get(field),
+            effective_runtime=runtime, resolution="checkpoint_consensus_verified_runtime_derivation",
+            reason=reason, evidence=evidence, checkpoints=[v["path"] for v in values])
+    return dict(effective_recipe=effective, applied_rules=applied, errors=errors,
+                checkpoint_effective_fields=observations)
+
+
 def assess_historical(report, recipe, epochs):
     """Keep exact selection strict, but distinguish missing evidence from contradictions."""
+    source_recipe = recipe
+    resolution = normalize_training_recipe(source_recipe, report["checkpoints"])
+    recipe = resolution["effective_recipe"]
     diagnoses, contradictions = [], []
     for checkpoint in report["checkpoints"]:
         entry = {key: checkpoint.get(key) for key in ("path", "sha256", "epoch", "raw_epoch", "version",
@@ -154,6 +215,7 @@ def assess_historical(report, recipe, epochs):
             "controller_present", "trajectory_id", "checkpoint_provenance", "error")}
         differences = recipe_differences(recipe, checkpoint.get("args", {}))
         entry["recipe_differences"] = differences
+        entry["source_recipe_differences"] = recipe_differences(source_recipe, checkpoint.get("args", {}))
         entry["target_state"] = checkpoint.get("epoch") in epochs
         entry["epoch_semantics"] = ("completed zero-based epoch" if checkpoint.get("version") == 2 else
             "stored next epoch minus one" if checkpoint.get("version") == 1 else "unknown; not inferred from filename")
@@ -178,9 +240,14 @@ def assess_historical(report, recipe, epochs):
                 not Path(c["path"]).name.startswith(("recovery", "tmp"))]
     missing = [e for e in epochs if not any(c.get("epoch") == e for c in eligible)]
     incompatible = [e for label, e in zip(STAGES, epochs) if label not in selected and e not in missing]
-    return dict(recipe_unambiguous=not contradictions, internal_conflicts=contradictions,
+    unambiguous = not contradictions and not resolution["errors"]
+    checkpoint_hashes = {c["path"]: digest_json(recipe_signature(c["args"])) for c in report["checkpoints"] if "error" not in c}
+    return dict(recipe_unambiguous=unambiguous, internal_conflicts=contradictions,
+        source_recipe=source_recipe, effective_recipe=recipe, runtime_normalization=resolution,
+        checkpoint_recipe_hashes=checkpoint_hashes,
+        checkpoint_recipes_identical=bool(checkpoint_hashes) and len(set(checkpoint_hashes.values())) == 1,
         checkpoint_diagnoses=diagnoses, compatible_stages=selected,
-        complete_and_compatible=len(selected) == 3 and not contradictions,
+        complete_and_compatible=len(selected) == 3 and unambiguous,
         rejection_reason=dict(missing_states=missing, incompatible_target_epochs=incompatible,
             selection_errors=selection_errors, checkpoint_conflicts=[d for d in diagnoses if d["target_state"] and
                 (d["recipe_differences"] or d["controller_present"])], internal_conflicts=contradictions),
@@ -191,6 +258,13 @@ def assess_historical(report, recipe, epochs):
 
 
 def print_assessment(assessment):
+    resolution = assessment["runtime_normalization"]
+    if resolution["applied_rules"]:
+        print("Historical source config discrepancy:", flush=True)
+        for field, rule in resolution["applied_rules"].items():
+            source = repr(rule["args_yaml"]) if rule["args_yaml_present"] else "absent"
+            print(f"  {field}: YAML {source} -> effective runtime {rule['effective_runtime']}", flush=True)
+        print("Resolution: verified runtime normalization (original YAML retained)", flush=True)
     for entry in assessment["checkpoint_diagnoses"]:
         if not entry["target_state"]:
             continue
@@ -204,12 +278,16 @@ def print_assessment(assessment):
                   f"(present={d['actual_present']})", flush=True)
     if not assessment["recipe_unambiguous"]:
         print("Historical recipe: INTERNALLY INCONSISTENT; manual review required; no regeneration", flush=True)
+        for error in resolution["errors"]:
+            print(f"  Runtime resolution error: {error}", flush=True)
         for entry in assessment["internal_conflicts"]:
             print(f"  {entry['path']}: {entry['conflicts']}", flush=True)
     elif assessment["complete_and_compatible"]:
         print("Historical checkpoint set: COMPLETE AND COMPATIBLE\nAction: reuse historical trajectory", flush=True)
     else:
         reason = assessment["rejection_reason"]
+        print("Historical trajectory: " + ("identical effective recipe across all readable checkpoints" if
+              assessment["checkpoint_recipes_identical"] else "recipe metadata consistent where present; not identical"), flush=True)
         print("Historical checkpoint set: REJECTED FOR PRIMARY STUDY", flush=True)
         print(f"Reason: missing states {reason['missing_states']}; incompatible historical targets "
               f"{reason['incompatible_target_epochs']}; selection errors {reason['selection_errors']}", flush=True)
@@ -289,10 +367,13 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
     if not epochs[0] < epochs[1] < epochs[2]:
         raise ValueError("Resolved schedule does not permit early20/mid150/final stage comparison")
     assessment = assess_historical(report, recipe, epochs)
+    assessment["complete_regeneration_selected"] = bool(regenerate and assessment["recipe_unambiguous"] and
+                                                       not assessment["complete_and_compatible"])
     write_json(study_dir / "historical_assessment.json", assessment)
     print_assessment(assessment)
     if not assessment["recipe_unambiguous"]:
         raise ValueError("Historical recipe internally ambiguous; manual review required (historical_assessment.json)")
+    recipe = assessment["effective_recipe"]
     source = provenance()
     if source.get("dirty") is not False:
         raise ValueError("Prepare/research requires a clean Git checkout")
@@ -333,6 +414,10 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
         selected_recipe.update(data_dir=str(Path(data_dir).resolve()), output=str(study_dir / "trajectory"),
             experiment="fixed_seed42", deterministic=True, sage_v2=False, fixed_alpha=4., sps_alpha=4.,
             trajectory_id=plan["trajectory_id"], milestone_checkpoints=epochs)
+        assessment["regeneration_effective_recipe"] = selected_recipe
+        write_json(study_dir / "historical_assessment.json", assessment)
+        if selected_recipe.get("native_amp") and getattr(getattr(torch.cuda, "amp", None), "autocast", None) is None:
+            raise RuntimeError("Effective historical recipe requires native AMP; refuse trainer fallback to FP32")
         recipe_path = study_dir / "regeneration.yml"
         recipe_path.write_text(yaml.safe_dump(selected_recipe), encoding="utf-8")
         directory = study_dir / "trajectory/fixed_seed42"
@@ -371,6 +456,7 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
     manifest = dict(schema_version=1, trajectory_id=plan["trajectory_id"], origin=plan["origin"],
                     source_mode=plan.get("source_mode", "historical_complete" if plan["origin"] == "historical" else "regenerated_complete_trajectory"),
                     historical_rejection_reason=plan.get("historical_rejection_reason"), recipe_sha256=recipe_hash,
+                    historical_runtime_normalization=assessment["runtime_normalization"],
                     trajectory_evidence=plan["evidence"], states=selected, recipe=selected_recipe,
                     trajectory_directory=report["path"] if plan["origin"] == "historical" else str(directory.resolve()),
                     training_seed=42, resolved_training_epochs=total, source=source)
