@@ -154,14 +154,14 @@ python -m experiments.gradient_flow.intervene \
 The example minibatch/early/mid/late files must be supplied; they are not created
 by these docs. Block IDs are zero-based. Default probe backend/device is CuPy/CUDA;
 use `--backend torch --device cpu` for CPU. Default probe precision is FP32; `--amp`
-enables native CUDA AMP. `--mode train` is default; `--mode eval` is a different,
+enables native CUDA AMP. `--mode eval` is default; `--mode train` is a different,
 explicit BatchNorm condition and is recorded in output.
 
 All blocks start at reference alpha=4 (override with --reference-alpha); each trial
 changes only its target block. Every forward restores identical weights and BN
 buffers, resets all neurons, clears gradients and restores Python/NumPy/Torch/CUDA
-RNG. An SGD object with LR=0 exists solely as an AMP unscale target: its step method
-is NEVER called, even in FP32. The caller's original weights, gradients, alphas,
+RNG. Only in AMP, an SGD object with LR=0 exists solely as an unscale target: its
+step method is NEVER called. FP32 constructs no optimizer. The caller's original weights, gradients, alphas,
 module modes, neuron memories and RNG are restored in a finally block. Call probes
 at batch boundaries, not while retaining a previous autograd graph.
 
@@ -205,3 +205,59 @@ unscale call, pre-clip norms, invalid-step handling and response-matrix structur
 CUDA AMP testing is skipped when no CUDA GPU is available. Synthetic response
 matrices/figures are correctness artifacts, not evidence of CIFAR accuracy gains,
 predictable feedback behavior or a completed new research method.
+
+## First fixed-checkpoint causal experiment
+
+Use eval mode and FP32 explicitly, reference transformer alpha=4, and sweep
+2,3,4,5,6. SPS is forced to 4 during each probe and its caller state is restored.
+All alphas, weights, BatchNorm buffers, neuron memories, modes, gradients and RNG
+are restored after EVERY probe, even on error. Gradients are cleared before every
+forward. FP32 probes construct no optimizer; optional legacy AMP support uses an
+optimizer only to unscale, never step. Repeated reference passes must agree in loss
+and G (rtol=1e-6, atol=1e-8); parameter invariance is checked exactly.
+
+From the repository root, with existing local CIFAR-10 test files and a trusted
+checkpoint (no dataset download or optimizer updates):
+
+```bash
+python -m experiments.gradient_flow.make_probe_batch --data-dir data \
+  --batch-size 32 --seed 42 \
+  --output results/gradient_flow/probe_batches/cifar10_eval_bs32_seed42.pt
+
+CKPT=results/umsen_official_recipe/baseline_seed42/model_best.pth.tar
+BATCH=results/gradient_flow/probe_batches/cifar10_eval_bs32_seed42.pt
+python -m experiments.gradient_flow.intervene \
+  --config configs/gradient_flow/cifar10_diagnostics.yml \
+  --checkpoint "$CKPT" --batch "$BATCH" --block 0 \
+  --alphas 2 3 4 5 6 --reference-alpha 4 --mode eval --device cuda --backend cupy \
+  --output results/gradient_flow/alpha_block0_seed42
+python -m experiments.gradient_flow.intervene \
+  --config configs/gradient_flow/cifar10_diagnostics.yml \
+  --checkpoint "$CKPT" --batch "$BATCH" --matrix \
+  --alphas 2 3 4 5 6 --reference-alpha 4 --mode eval --device cuda --backend cupy \
+  --output results/gradient_flow/alpha_matrix_seed42
+python -m analysis.gradient_flow.plot_alpha_response \
+  --measurements results/gradient_flow/alpha_matrix_seed42/checkpoint/measurements.json \
+  --output-dir figures/gradient_flow/alpha_matrix_seed42
+```
+
+The batch helper selects test indices 0..31 in deterministic order (seed is recorded,
+not a random sample selector) and reuses the project's eval transform factory,
+including configured normalization. Schema: `images` FP32 [B,3,32,32], `targets`
+int64 [B], plus provenance. Batch and output paths must be new; nothing is overwritten.
+
+Each checkpoint output directory contains nested `measurements.json`, flat
+`raw_measurements.jsonl` and `.csv` (perturbed block x alpha x measured block), and
+`metadata.json`. `response_matrix.json` retains the historical endpoint secant
+(alpha=2/6 for this sweep). SEPARATELY, `local_response_matrix.json` uses the nearest
+symmetric measured pair around reference alpha: (G_i(5)-G_i(3))/2 here. It is a
+finite-difference estimate at step size 1, not an exact derivative. If no symmetric
+pair exists, a warning is emitted and raw/endpoint outputs are still retained.
+The existing endpoint heatmap is retained and labeled as a secant; generate the
+new local-response plots/summary with the saved-output analysis command above.
+
+The matplotlib-only plotter exports PNG/PDF G-versus-alpha curves and a labeled
+local-response heatmap. Its summary lists diagonal responses, strongest absolute
+off-diagonal response, mean absolute diagonal/off-diagonal ratio when defined,
+and sampled monotonicity within reference +/-1. These are descriptive measurements,
+not claims that G=0 is optimal or that alpha is an effective feedback controller.
