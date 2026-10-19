@@ -1,6 +1,6 @@
 # Gradient-Flow Jobs
 
-`run_alpha_state_dependence_cifar10.sh` explicitly pins gpu006. It audits historical
+`run_alpha_state_dependence_cifar10.sh` explicitly pins gpu002. It audits historical
 milestones, conditionally regenerates one separate Fixed-SG trajectory, and reuses
 the multi-batch probe/analysis tooling across early/mid/late. See
 [the state protocol](../../experiments/gradient_flow/TRAINING_STATES.md).

@@ -24,6 +24,9 @@ OPERATIONAL = {"output", "experiment", "resume", "initial_checkpoint", "init_che
                "start_epoch", "rank", "world_size", "distributed", "device", "local_rank", "config_sources",
                "determinism_settings", "sage_v2", "milestone_checkpoints", "trajectory_id", "no_resume_opt"}
 OPERATIONAL.update(("log_interval", "checkpoint_hist", "recovery_interval"))
+# These describe provenance, never a training hyperparameter. They still count
+# against exact historical selection; only recipe reconstruction treats them separately.
+PROVENANCE_FIELDS = {"git_commit", "git_sha", "source_commit", "commit", "provenance"}
 
 
 def args_dict(value):
@@ -83,6 +86,7 @@ def audit(directory):
             extra = checkpoint.get("sage_training_state") or {}
             report["checkpoints"].append(dict(path=str(path), sha256=digest_file(path), epoch=checkpoint_epoch(checkpoint), raw_epoch=checkpoint.get("epoch"),
                 metric=checkpoint.get("metric"), version=checkpoint.get("version"), args=saved_args,
+                arch=checkpoint.get("arch"), checkpoint_provenance=checkpoint.get("provenance"),
                 trajectory_id=saved_args.get("trajectory_id"), keys=sorted(checkpoint),
                 scheduler_present=extra.get("scheduler") is not None, rng_present=extra.get("rng") is not None,
                 controller_present=extra.get("controller") is not None,
@@ -127,6 +131,88 @@ def choose_stages(report, recipe, epochs, trajectory_id=None):
         if len(selected_ids) != 1:
             raise ValueError("Selected checkpoints have conflicting embedded trajectory IDs")
     return result
+
+
+def recipe_differences(expected, actual):
+    expected, actual = recipe_signature(expected), recipe_signature(actual)
+    differences = []
+    for key in sorted(set(expected) | set(actual)):
+        if key in expected and key in actual and expected[key] == actual[key]:
+            continue
+        differences.append(dict(field=key, expected_present=key in expected, actual_present=key in actual,
+            expected=expected.get(key), actual=actual.get(key),
+            category="provenance" if key in PROVENANCE_FIELDS else "recipe"))
+    return differences
+
+
+def assess_historical(report, recipe, epochs):
+    """Keep exact selection strict, but distinguish missing evidence from contradictions."""
+    diagnoses, contradictions = [], []
+    for checkpoint in report["checkpoints"]:
+        entry = {key: checkpoint.get(key) for key in ("path", "sha256", "epoch", "raw_epoch", "version",
+            "arch", "model_keys", "optimizer_present", "scheduler_present", "rng_present", "scaler_keys",
+            "controller_present", "trajectory_id", "checkpoint_provenance", "error")}
+        differences = recipe_differences(recipe, checkpoint.get("args", {}))
+        entry["recipe_differences"] = differences
+        entry["target_state"] = checkpoint.get("epoch") in epochs
+        entry["epoch_semantics"] = ("completed zero-based epoch" if checkpoint.get("version") == 2 else
+            "stored next epoch minus one" if checkpoint.get("version") == 1 else "unknown; not inferred from filename")
+        # Missing embedded fields are absent evidence, not contradictory values.
+        # Extra scientific fields absent from args.yaml make that recipe incomplete.
+        conflicts = [d for d in differences if d["category"] == "recipe" and d["actual_present"]]
+        if checkpoint.get("controller_present"):
+            conflicts.append(dict(field="sage_training_state.controller", category="recipe",
+                                  expected=None, actual="present"))
+        if checkpoint.get("arch") is not None and checkpoint["arch"] != recipe.get("model"):
+            conflicts.append(dict(field="arch", category="recipe", expected=recipe.get("model"), actual=checkpoint["arch"]))
+        if conflicts:
+            contradictions.append(dict(path=checkpoint["path"], conflicts=conflicts))
+        diagnoses.append(entry)
+    selection_errors = []
+    try:
+        selected = choose_stages(report, recipe, epochs)
+    except ValueError as error:
+        selected = {}
+        selection_errors.append(str(error))
+    eligible = [c for c in report["checkpoints"] if c.get("model_keys") and
+                not Path(c["path"]).name.startswith(("recovery", "tmp"))]
+    missing = [e for e in epochs if not any(c.get("epoch") == e for c in eligible)]
+    incompatible = [e for label, e in zip(STAGES, epochs) if label not in selected and e not in missing]
+    return dict(recipe_unambiguous=not contradictions, internal_conflicts=contradictions,
+        checkpoint_diagnoses=diagnoses, compatible_stages=selected,
+        complete_and_compatible=len(selected) == 3 and not contradictions,
+        rejection_reason=dict(missing_states=missing, incompatible_target_epochs=incompatible,
+            selection_errors=selection_errors, checkpoint_conflicts=[d for d in diagnoses if d["target_state"] and
+                (d["recipe_differences"] or d["controller_present"])], internal_conflicts=contradictions),
+        epoch_numbering=dict(logical="completed zero-based training epoch", target_epochs=epochs,
+            scheduled_epoch_count=epochs[-1]+1, filename="timm checkpoint-<epoch> uses the loop epoch; last/model_best have no epoch in their name",
+            version2="epoch field equals completed loop epoch", version1="epoch field is next epoch; subtract one",
+            unversioned="unknown; never infer from filename"))
+
+
+def print_assessment(assessment):
+    for entry in assessment["checkpoint_diagnoses"]:
+        if not entry["target_state"]:
+            continue
+        print(f"Target checkpoint: {entry['path']}; raw_epoch={entry['raw_epoch']}; "
+              f"version={entry['version']}; logical_epoch={entry['epoch']}", flush=True)
+        print(f"  model_keys={entry['model_keys']}; optimizer={entry['optimizer_present']}; "
+              f"scheduler={entry['scheduler_present']}; scaler_keys={entry['scaler_keys']}", flush=True)
+        for d in entry["recipe_differences"]:
+            print(f"  {d['category']} field {d['field']}: args.yaml={d['expected']!r} "
+                  f"(present={d['expected_present']}); checkpoint={d['actual']!r} "
+                  f"(present={d['actual_present']})", flush=True)
+    if not assessment["recipe_unambiguous"]:
+        print("Historical recipe: INTERNALLY INCONSISTENT; manual review required; no regeneration", flush=True)
+        for entry in assessment["internal_conflicts"]:
+            print(f"  {entry['path']}: {entry['conflicts']}", flush=True)
+    elif assessment["complete_and_compatible"]:
+        print("Historical checkpoint set: COMPLETE AND COMPATIBLE\nAction: reuse historical trajectory", flush=True)
+    else:
+        reason = assessment["rejection_reason"]
+        print("Historical checkpoint set: REJECTED FOR PRIMARY STUDY", flush=True)
+        print(f"Reason: missing states {reason['missing_states']}; incompatible historical targets "
+              f"{reason['incompatible_target_epochs']}; selection errors {reason['selection_errors']}", flush=True)
 
 
 def compare_historical(historical, regenerated):
@@ -186,6 +272,9 @@ def compare_final_checkpoints(historical, regenerated, recipe, final_epoch, data
 
 def prepare(historical_dir, study_dir, data_dir, regenerate=False):
     study_dir = Path(study_dir)
+    historical_path, destination = Path(historical_dir).resolve(), study_dir.resolve()
+    if destination.is_relative_to(historical_path) or historical_path.is_relative_to(destination):
+        raise ValueError("Study and historical directories must be separate; historical artifacts are read-only")
     study_dir.mkdir(parents=True, exist_ok=True)
     report = audit(historical_dir)
     path = study_dir / ("checkpoint_inventory_latest.json" if (study_dir / "checkpoint_inventory.json").exists() else "checkpoint_inventory.json")
@@ -199,6 +288,11 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
     print(f"Audit: {len(report['checkpoints'])} checkpoint files; resolved training epochs={total}; target states={epochs}", flush=True)
     if not epochs[0] < epochs[1] < epochs[2]:
         raise ValueError("Resolved schedule does not permit early20/mid150/final stage comparison")
+    assessment = assess_historical(report, recipe, epochs)
+    write_json(study_dir / "historical_assessment.json", assessment)
+    print_assessment(assessment)
+    if not assessment["recipe_unambiguous"]:
+        raise ValueError("Historical recipe internally ambiguous; manual review required (historical_assessment.json)")
     source = provenance()
     if source.get("dirty") is not False:
         raise ValueError("Prepare/research requires a clean Git checkout")
@@ -210,22 +304,20 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
         if plan["identity"] != identity:
             raise ValueError("Existing state study uses different code/args/data; choose a NEW study directory")
     else:
-        found = choose_stages(report, recipe, epochs)
-        ambiguous = [epoch for label, epoch in zip(STAGES, epochs) if label not in found and any(
-            c.get("epoch") == epoch and c.get("model_keys") and
-            not Path(c["path"]).name.startswith(("recovery", "tmp")) for c in report["checkpoints"])]
-        if ambiguous:
-            raise ValueError(f"Target epochs {ambiguous} exist but their recipe/provenance conflicts; manual review required before regeneration")
+        found = assessment["compatible_stages"]
         if len(found) != 3 and not regenerate:
             raise ValueError("Missing historical milestones. Explicit --regenerate-missing required; no training launched")
         plan = dict(identity=identity, origin="historical" if len(found) == 3 else "regenerated",
                     trajectory_id=digest_json(identity) if len(found) == 3 else "fixed_seed42_"+uuid.uuid4().hex,
                     recipe=recipe,
                     historical_available_stages=found,
+                    source_mode="historical_complete" if len(found) == 3 else "regenerated_complete_trajectory",
+                    historical_rejection_reason=None if len(found) == 3 else assessment["rejection_reason"],
                     evidence=("same original run directory plus matching embedded recipe/seed; no cryptographic proof of historical data ordering"
                               if len(found) == 3 else "one NEW from-scratch run with unique persisted trajectory ID on all milestones; no historical states mixed"))
         write_json(plan_path, plan)
     print(f"Selected trajectory origin: {plan['origin']}; historical available states: {list(plan['historical_available_stages'])}", flush=True)
+    print(f"Primary states: epochs {','.join(map(str, epochs))}", flush=True)
     if plan["origin"] == "historical":
         selected = choose_stages(report, recipe, epochs)
         if len(selected) != 3:
@@ -236,7 +328,8 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
     else:
         if not regenerate:
             raise ValueError("Missing historical milestones. Explicit --regenerate-missing required; no training launched")
-        selected_recipe = {k: v for k, v in recipe.items() if k not in OPERATIONAL}
+        print("Action: regenerate complete trajectory (or resume ONLY this study's new trajectory); no historical primary states reused", flush=True)
+        selected_recipe = {k: v for k, v in recipe.items() if k not in OPERATIONAL | PROVENANCE_FIELDS}
         selected_recipe.update(data_dir=str(Path(data_dir).resolve()), output=str(study_dir / "trajectory"),
             experiment="fixed_seed42", deterministic=True, sage_v2=False, fixed_alpha=4., sps_alpha=4.,
             trajectory_id=plan["trajectory_id"], milestone_checkpoints=epochs)
@@ -271,7 +364,13 @@ def prepare(historical_dir, study_dir, data_dir, regenerate=False):
             for key in sorted(set(recipe) | set(selected_recipe)) if recipe.get(key) != selected_recipe.get(key)}
         validation["final_checkpoint_comparison"] = compare_final_checkpoints(report, current, selected_recipe, epochs[-1], data_dir)
         write_json(study_dir / "trajectory_validation.json", validation)
+    recipe_hash = digest_json(recipe_signature(selected_recipe))
+    selected = {label: dict(entry, logical_epoch=entry["epoch"], physical_checkpoint=Path(entry["path"]).name,
+        trajectory_id=plan["trajectory_id"], seed=42, recipe_sha256=recipe_hash, total_scheduled_epochs=total,
+        git_commit=source.get("commit") if plan["origin"] == "regenerated" else None) for label, entry in selected.items()}
     manifest = dict(schema_version=1, trajectory_id=plan["trajectory_id"], origin=plan["origin"],
+                    source_mode=plan.get("source_mode", "historical_complete" if plan["origin"] == "historical" else "regenerated_complete_trajectory"),
+                    historical_rejection_reason=plan.get("historical_rejection_reason"), recipe_sha256=recipe_hash,
                     trajectory_evidence=plan["evidence"], states=selected, recipe=selected_recipe,
                     trajectory_directory=report["path"] if plan["origin"] == "historical" else str(directory.resolve()),
                     training_seed=42, resolved_training_epochs=total, source=source)

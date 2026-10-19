@@ -8,8 +8,12 @@ All probe mechanics and G remain in the existing intervention/multi-batch engine
 
 The local workspace inspected for this implementation does NOT contain
 `results/umsen_official_recipe/baseline_seed42/`. Its HPC-only checkpoints,
-`args.yaml`, summaries and provenance could not be inspected locally. Whether
-regeneration is needed is therefore UNKNOWN until the Lawrence audit runs.
+`args.yaml`, summaries and provenance could not be inspected locally. The exact
+checkpoint metadata therefore remains unverified here. The Lawrence report
+supplied after implementation lists 12 historical files, no epoch20/150 files,
+and a rejected logical epoch309 candidate. Therefore that collection cannot supply
+the primary trio. The report does NOT identify which physical file or metadata
+field caused rejection; those are not inferred from the filenames.
 No missing checkpoint is fabricated, inferred from a filename, or interpolated.
 
 `checkpoint_stages.py` inventories actual checkpoint dictionaries recursively,
@@ -17,8 +21,10 @@ reports hashes, raw/completed epoch semantics, embedded arguments, model keys,
 optimizer/scaler/scheduler/RNG presence, best/current metrics, summary and provenance.
 It uses historical `args.yaml` as authoritative, comparing full embedded recipes
 (excluding explicit operational/output and logging/checkpoint-frequency fields).
-Target-epoch files with conflicting recipe/provenance abort for manual review,
-rather than triggering unnecessary automatic regeneration. Missing authoritative args aborts;
+`historical_assessment.json` records each checkpoint's physical path, SHA256,
+raw/versioned logical epoch, model/optimizer/scaler/scheduler metadata, and every
+non-operational embedded-argument difference with presence flags. Target details
+and the selection decision are printed before any training. Missing authoritative args aborts;
 it does NOT silently fall back to the approximate recipe from a prompt.
 
 Requested early/mid epochs are completed zero-based epochs 20 and 150. Late is
@@ -26,6 +32,10 @@ the final epoch of the resolved timm scheduler, not best-validation epoch. The
 repository YAML currently says epochs=300 PLUS cooldown_epochs=10; the tested timm
 schedule resolves to 310 epochs, so late would be 309, not 299. Actual HPC args and
 installed scheduler determine the value and it is printed/stored everywhere.
+The trainer iterates `range(start_epoch, num_epochs)` and saves after validation
+and the scheduler's next-epoch step. Timm's `checkpoint-<epoch>.pth.tar` filename
+uses that same zero-based loop epoch, as do our `checkpoint_epoch<epoch>` copies.
+`last` and `model_best` have no filename epoch; neither implies a milestone.
 Version2 timm stores the completed epoch; version1 stores the next epoch, so the
 audit subtracts one. Unversioned epochs are not guessed/automatically selected.
 
@@ -35,15 +45,44 @@ present. Different state paths/hashes are mandatory. `model_best` is eligible ON
 if its actual completed epoch matches the requested target; it is never a fallback
 for final. Legacy same-directory provenance is evidence of one run, not a
 cryptographic proof of initial weights/data order; this limitation is recorded.
-Conflicting IDs/recipes abort or prevent selection. Ambiguous provenance needs
-manual review before attributing any result to the original optimization trajectory.
+Exact full recipe matching remains required for reuse: no defaults are silently
+filled and no mismatched historical state is accepted.
+
+## Recipe Ambiguity Versus Incomplete Evidence
+
+The audit compares ALL readable historical checkpoint arguments to `args.yaml`,
+not just target checkpoints. Contradictory shared scientific fields (seed, LR,
+architecture, schedule, augmentation, alpha, etc.), extra scientific arguments
+missing from `args.yaml`, conflicting `arch`, or a saved controller make the
+recipe ambiguous and abort even with regeneration authorized. No guessed recipe
+or default-filling is used. Unknown extra arguments are treated conservatively as
+scientific, not silently ignored.
+
+Missing embedded fields are missing evidence, not contradictory values; they
+still prevent exact historical selection. Only `git_commit`, `git_sha`,
+`source_commit`, `commit`, and `provenance` are explicitly recognized as provenance
+rather than hyperparameters. Their differences still reject exact historical
+selection, but do not contradict an otherwise verified training recipe. Conflicting
+trajectory IDs or duplicate state hashes likewise prevent reusing the historical
+trio. The evidence limitations and exact differences are retained in the assessment.
 
 ## Missing Historical Milestones
 
-The job explicitly authorizes `--regenerate-missing`. If any target is unavailable,
+The job explicitly authorizes `--regenerate-missing`. If ANY target is unavailable
+or incompatible, but the historical recipe is unambiguous,
 ALL three primary states come from ONE new from-scratch Fixed-SG trajectory under
 this study's own `trajectory/fixed_seed42/`, never a mixture with historical late.
 No historical checkpoint is moved, overwritten, or used to initialize regeneration.
+In particular, missing early/mid plus a late provenance-only mismatch selects a
+new COMPLETE trajectory; a late training-setting contradiction still aborts.
+With no authorization, incomplete/incompatible sets fail without training.
+
+The plan and `states.json` record `source_mode=historical_complete` or
+`regenerated_complete_trajectory`, and `historical_rejection_reason` includes
+missing states, incompatible targets, selection errors, and exact conflict details.
+Every regenerated state records logical epoch, physical filename, SHA256,
+trajectory ID, seed, recipe hash, scheduled epoch count, and regeneration Git SHA.
+Historical training Git SHA is not invented when unavailable.
 
 The existing official CIFAR trainer, loaders, augmentation, optimizer, scheduler,
 loss, AMP and checkpoint/resume implementation are reused. Regeneration retains
@@ -115,6 +154,7 @@ All output is separate from prior single/multi-batch runs:
 ```text
 results/gradient_flow/alpha_state_dependence_seed42/
     checkpoint_inventory.json, checkpoint_inventory_latest.json
+    historical_assessment.json       # exact differences, even before an abort
     trajectory_plan.json, regeneration.yml (only if needed)
     trajectory/fixed_seed42/          # new training artifacts only if necessary
     trajectory_validation.json       # only after regeneration completes
@@ -138,7 +178,7 @@ The SLURM launcher additionally requires `flock` and holds a repository-local
 advisory lock for its entire workflow; duplicate concurrent submissions fail
 without writing trajectory data. The lock is automatically released on exit.
 
-The launcher explicitly requests ONE GPU on gpu006, partition gpu, 16 CPUs, 64G,
+The launcher explicitly requests ONE GPU on gpu002, partition gpu, 16 CPUs, 64G,
 maximum two days, and the verified existing snn environment. It checks hostname and
 dirty status, prints hardware/Git/Python details, audits first, conditionally trains,
 probes, analyzes and prints elapsed time. No account/QoS/module is invented.

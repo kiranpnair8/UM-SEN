@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=sage-alpha-states
 #SBATCH --partition=gpu
-#SBATCH --nodelist=gpu006
+#SBATCH --nodelist=gpu002
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -19,8 +19,8 @@ test -f experiments/gradient_flow/checkpoint_stages.py
 date
 hostname
 case "$(hostname -s)" in
-  gpu006) ;;
-  *) echo "ERROR: this experiment must execute on gpu006" >&2; exit 2 ;;
+  gpu002) ;;
+  *) echo "ERROR: this experiment must execute on gpu002" >&2; exit 2 ;;
 esac
 nvidia-smi
 git rev-parse HEAD
@@ -30,7 +30,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 2
 fi
 command -v flock >/dev/null || { echo "flock is required to prevent concurrent study writers" >&2; exit 2; }
-exec 9>logs/gradient_flow/alpha_states_gpu006.lock
+exec 9>logs/gradient_flow/alpha_states_gpu002.lock
 flock -n 9 || { echo "Another state study is already running in this clone" >&2; exit 2; }
 SNN_ENV="${SNN_ENV:-/home/rizk_lab/shared/kiran/envs/snn}"
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -45,8 +45,8 @@ RUN_DIR="${RUN_DIR:-results/gradient_flow/alpha_state_dependence_seed42}"
 DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data}"
 HISTORICAL_DIR="${HISTORICAL_DIR:-results/umsen_official_recipe/baseline_seed42}"
 FIGURE_DIR="${FIGURE_DIR:-figures/gradient_flow/alpha_state_dependence_seed42}"
-# Audit first. Missing args/provenance conflicts abort rather than guessing a recipe.
-# Only missing target states authorize ONE fresh deterministic baseline trajectory.
+# Audit first. Internally inconsistent recipes abort rather than guessing.
+# An incomplete/incompatible set authorizes ONE separate complete trajectory.
 python -u -m experiments.gradient_flow.checkpoint_stages \
   --historical-dir "${HISTORICAL_DIR}" --study-dir "${RUN_DIR}" \
   --data-dir "${DATA_DIR}" --regenerate-missing

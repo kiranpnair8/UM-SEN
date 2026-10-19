@@ -13,7 +13,7 @@ pytest.importorskip("spikingjelly.clock_driven.functional")
 
 from experiments.gradient_flow.common import ROOT, build_model, load_config
 from experiments.gradient_flow.checkpoint_stages import (STAGES, audit, checkpoint_epoch, choose_stages,
-    recipe_signature, scheduled_epochs, validate_baseline)
+    assess_historical, recipe_signature, scheduled_epochs, validate_baseline)
 from experiments.gradient_flow.intervene import same_state
 from experiments.gradient_flow.multi_batch_intervene import digest_file
 from experiments.gradient_flow.multi_batch_stats import aggregate_measurements
@@ -59,6 +59,8 @@ def test_audit_actual_epochs_and_no_best_substitution(tmp_path):
     assert checkpoint_epoch(dict(epoch=21, version=1)) == 20
     assert checkpoint_epoch(dict(epoch=20, version=2)) == 20
     assert checkpoint_epoch(dict(epoch=20)) is None
+    assert checkpoint_epoch(dict(epoch=309, version=2)) == 309
+    assert checkpoint_epoch(dict(epoch=310, version=1)) == 309
     recipe = load_config(ROOT / "spikformer/cifar10/cifar10.yml")
     recipe.update(seed=42)
     validate_baseline(recipe)
@@ -174,6 +176,8 @@ def test_prepare_reuses_complete_historical_run_without_training(tmp_path, monke
     monkeypatch.setattr(stages.subprocess, "run", forbidden)
     result = stages.prepare(tmp_path / "historical", tmp_path / "study", "unused", regenerate=True)
     assert result["origin"] == "historical"
+    assert result["source_mode"] == "historical_complete"
+    assert result["historical_rejection_reason"] is None
     validate_manifest(result)
     original_audit = stages.audit
     def missing_early(path):
@@ -190,6 +194,123 @@ def test_prepare_reuses_complete_historical_run_without_training(tmp_path, monke
     monkeypatch.setattr(stages, "audit", conflicting_recipe)
     with pytest.raises(ValueError, match="manual review"):
         stages.prepare(tmp_path / "historical", tmp_path / "conflict", "unused", regenerate=True)
+
+
+@pytest.mark.parametrize("late_evidence", ["provenance_only", "missing_metadata", "matching"])
+def test_lawrence_partial_collection_regenerates_complete_trajectory(tmp_path, monkeypatch, late_evidence):
+    """Synthetic reproduction of the reported file collection, not real HPC metadata."""
+    import yaml
+    import experiments.gradient_flow.checkpoint_stages as stages
+    manifest = synthetic_states(tmp_path / "historical")
+    historical = tmp_path / "historical"
+    recipe = dict(manifest["recipe"], cooldown_epochs=10, mixup=.5)
+    (historical / "args.yaml").write_text(yaml.safe_dump(recipe))
+    for p in historical.glob("*.pth.tar"):
+        p.unlink()
+    for epoch in (262, 283, 288, 295, 296, 298, 299, 305, 306, 308, 309):
+        args = dict(recipe)
+        if epoch == 309 and late_evidence == "provenance_only":
+            args["git_commit"] = "historical-source-unknown-to-args-yaml"
+        if epoch == 309 and late_evidence == "missing_metadata":
+            args.pop("mixup")
+        name = "last.pth.tar" if epoch == 309 else f"checkpoint-{epoch}.pth.tar"
+        torch.save(dict(state_dict={"synthetic": torch.tensor(float(epoch))}, args=Namespace(**args),
+                        epoch=epoch, version=2, arch="spikformer", optimizer={}, metric=0.), historical / name)
+    import shutil
+    shutil.copyfile(historical / "checkpoint-262.pth.tar", historical / "model_best.pth.tar")
+    before = {p.name: digest_file(p) for p in historical.iterdir()}
+    monkeypatch.setattr(stages, "provenance", lambda: dict(commit="synthetic-source-sha", dirty=False))
+    monkeypatch.setattr(stages, "validate_baseline", lambda recipe: None)
+    monkeypatch.setattr(stages, "compare_final_checkpoints", lambda *args: dict(status="synthetic test: no GPU"))
+    calls = []
+    def fake_train(command, **kwargs):
+        calls.append(command)
+        settings = yaml.safe_load(Path(command[command.index("-c")+1]).read_text())
+        directory = Path(settings["output"]) / settings["experiment"]
+        directory.mkdir(parents=True)
+        for epoch in settings["milestone_checkpoints"]:
+            torch.save(dict(state_dict={"synthetic": torch.tensor(float(epoch))}, args=Namespace(**settings),
+                epoch=epoch, version=2, sage_training_state={"controller": None, "scheduler": {}, "rng": {}},
+                optimizer={}, metric=0.), directory / f"checkpoint_epoch{epoch:03d}.pth.tar")
+    monkeypatch.setattr(stages.subprocess, "run", fake_train)
+    with pytest.raises(ValueError, match="Explicit --regenerate-missing"):
+        stages.prepare(historical, tmp_path / "not_authorized", "unused", regenerate=False)
+    assert not calls
+    result = stages.prepare(historical, tmp_path / "study", "unused", regenerate=True)
+    assert len(calls) == 1
+    assert result["origin"] == "regenerated" and result["source_mode"] == "regenerated_complete_trajectory"
+    assert result["historical_rejection_reason"]["missing_states"] == [20, 150]
+    assert result["historical_rejection_reason"]["incompatible_target_epochs"] == ([] if late_evidence == "matching" else [309])
+    assert {e["logical_epoch"] for e in result["states"].values()} == {20, 150, 309}
+    assert len({e["sha256"] for e in result["states"].values()}) == 3
+    assert {e["trajectory_id"] for e in result["states"].values()} == {result["trajectory_id"]}
+    assert {e["recipe_sha256"] for e in result["states"].values()} == {result["recipe_sha256"]}
+    assert all(e["seed"] == 42 and e["total_scheduled_epochs"] == 310 and
+               e["git_commit"] == "synthetic-source-sha" for e in result["states"].values())
+    assert all(Path(e["path"]).parent == (tmp_path / "study/trajectory/fixed_seed42").resolve()
+               and e["physical_checkpoint"] == Path(e["path"]).name for e in result["states"].values())
+    validate_manifest(result)
+    assert {p.name: digest_file(p) for p in historical.iterdir()} == before
+    assessment = json.loads((tmp_path / "study/historical_assessment.json").read_text())
+    late = next(c for c in assessment["checkpoint_diagnoses"] if c["epoch"] == 309)
+    assert Path(late["path"]).name == "last.pth.tar" and late["raw_epoch"] == 309 and late["version"] == 2
+    assert assessment["epoch_numbering"]["scheduled_epoch_count"] == 310
+    if late_evidence != "matching":
+        assert late["recipe_differences"]
+        assert result["historical_rejection_reason"]["checkpoint_conflicts"]
+    # A restart skips training and keeps exactly the same primary checkpoint identities.
+    assert stages.prepare(historical, tmp_path / "study", "unused", regenerate=True) == result
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("field,value", [("lr", .1), ("seed", 43), ("cooldown_epochs", 10),
+                                        ("fixed_alpha", 3.), ("dim", 32), ("unknown_training_option", 123)])
+def test_internally_conflicting_recipe_still_blocks_regeneration(tmp_path, monkeypatch, field, value):
+    import yaml
+    import experiments.gradient_flow.checkpoint_stages as stages
+    manifest = synthetic_states(tmp_path / "historical")
+    historical = tmp_path / "historical"
+    (historical / "args.yaml").write_text(yaml.safe_dump(manifest["recipe"]))
+    checkpoint = stages.load_trusted_checkpoint(historical / "late.pth.tar")
+    setattr(checkpoint["args"], field, value)
+    torch.save(checkpoint, historical / "late.pth.tar")
+    before = {p.name: digest_file(p) for p in historical.iterdir()}
+    monkeypatch.setattr(stages, "validate_baseline", lambda recipe: None)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Ambiguous recipe must never train")
+    monkeypatch.setattr(stages.subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="internally ambiguous.*manual review"):
+        stages.prepare(historical, tmp_path / "study", "unused", regenerate=True)
+    report = json.loads((tmp_path / "study/historical_assessment.json").read_text())
+    assert not report["recipe_unambiguous"]
+    assert report["internal_conflicts"][0]["conflicts"][0]["field"] == field
+    assert not (tmp_path / "study/trajectory_plan.json").exists()
+    assert {p.name: digest_file(p) for p in historical.iterdir()} == before
+
+
+def test_assessment_epoch_filename_and_duplicate_selection(tmp_path):
+    manifest = synthetic_states(tmp_path / "historical")
+    report = audit(tmp_path / "historical")
+    for c, epoch in zip(sorted(report["checkpoints"], key=lambda c: c["epoch"]), (20, 150, 309)):
+        c["epoch"] = epoch
+    late = next(c for c in report["checkpoints"] if c["epoch"] == 309)
+    late.update(path=str(tmp_path / "checkpoint-308.pth.tar"), raw_epoch=310, version=1)
+    assessment = assess_historical(report, manifest["recipe"], [20, 150, 309])
+    assert assessment["complete_and_compatible"]
+    entry = next(c for c in assessment["checkpoint_diagnoses"] if c["epoch"] == 309)
+    assert entry["raw_epoch"] == 310 and entry["epoch_semantics"] == "stored next epoch minus one"
+    report["checkpoints"][1]["sha256"] = report["checkpoints"][0]["sha256"]
+    with pytest.raises(ValueError, match="duplicate checkpoint content"):
+        choose_stages(report, manifest["recipe"], [20, 150, 309])
+    assert not assess_historical(report, manifest["recipe"], [20, 150, 309])["complete_and_compatible"]
+
+
+def test_study_never_writes_inside_historical_directory(tmp_path):
+    import experiments.gradient_flow.checkpoint_stages as stages
+    historical = tmp_path / "historical"
+    with pytest.raises(ValueError, match="historical artifacts are read-only"):
+        stages.prepare(historical, historical / "study", "unused", regenerate=True)
+    assert not historical.exists()
 
 
 def test_three_state_smoke_resume_and_corruption(tmp_path, monkeypatch):
