@@ -1,5 +1,8 @@
 # Gradient-Flow Research
 
+See [multi-batch causal validation](MULTIBATCH.md) for the fixed-checkpoint,
+25-batch SAGE evaluation protocol, resume rules, statistics, and Lawrence launcher.
+
 This namespace implements the first passive diagnostic stage for block-specific
 surrogate gradients and backward optimization dynamics in Spiking Transformers.
 There is no adaptive feedback controller or finalized method name. Shared model,

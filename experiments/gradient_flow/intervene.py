@@ -31,6 +31,19 @@ def restore_rng(state):
         torch.cuda.set_rng_state_all(state["cuda"])
 
 
+def same_state(a, b):
+    """Exact recursive comparison for caller neuron/RNG snapshots."""
+    if torch.is_tensor(a):
+        return torch.is_tensor(b) and torch.equal(a, b)
+    if isinstance(a, np.ndarray):
+        return isinstance(b, np.ndarray) and np.array_equal(a, b)
+    if isinstance(a, dict):
+        return isinstance(b, dict) and a.keys() == b.keys() and all(same_state(a[k], b[k]) for k in a)
+    if isinstance(a, (tuple, list)):
+        return isinstance(b, type(a)) and len(a) == len(b) and all(same_state(x, y) for x, y in zip(a, b))
+    return a == b
+
+
 def intervention(model, images, targets, block_ids, alpha_values, reference_alpha=4., beta=.95,
                  amp=False, mode="train"):
     """Restore caller weights, BN, gradients, mode, neuron memory and RNG even on error."""
@@ -66,6 +79,13 @@ def intervention(model, images, targets, block_ids, alpha_values, reference_alph
         for module, training in original_modes:
             module.training = training
         restore_rng(rng)
+        if (scope.snapshot() != caller_alpha or
+                any(not torch.equal(value, original_weights[name]) for name, value in model.state_dict().items()) or
+                any(not same_state(p.grad, grad) for p, grad in zip(model.parameters(), original_grads)) or
+                any(not same_state(module._memories, memory) for module, memory in memories) or
+                any(module.training != training for module, training in original_modes) or
+                not same_state(rng_snapshot(), rng)):
+            raise AssertionError("Probe caller state restoration failed")
 
     def trial(block_id=None, alpha=None, reference=None):
         model.load_state_dict(original_weights)

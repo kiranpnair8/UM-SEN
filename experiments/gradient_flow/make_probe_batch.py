@@ -9,7 +9,8 @@ from torchvision.datasets import CIFAR10
 from .common import ROOT, load_config, provenance, seed_all
 
 
-def make_batch(data_dir, config, batch_size=32):
+def iter_batches(data_dir, config, batch_size=32, num_batches=1):
+    """One sequential traversal; seed is provenance, not random resampling."""
     # Same transform factory and eval arguments as the official CIFAR loader;
     # CPU normalization replaces the CUDA prefetcher's equivalent normalization.
     from transforms_factory import create_transform
@@ -17,14 +18,21 @@ def make_batch(data_dir, config, batch_size=32):
         is_training=False, use_prefetcher=False, interpolation=config.get("interpolation", "bicubic"),
         mean=config["mean"], std=config["std"], crop_pct=config.get("crop_pct", 1.))
     dataset = CIFAR10(data_dir, train=False, download=False, transform=transform)
-    if not 1 <= batch_size <= len(dataset):
-        raise ValueError("Batch size must be within the test dataset size")
-    images, targets = next(iter(torch.utils.data.DataLoader(dataset, batch_size=batch_size,
-        shuffle=False, num_workers=0, drop_last=False)))
-    return dict(images=images.float(), targets=targets.long(), synthetic=False,
-                dataset="cifar10", split="test", indices=list(range(batch_size)),
-                preprocessing=dict(mean=config["mean"], std=config["std"],
-                    interpolation=config.get("interpolation", "bicubic"), crop_pct=config.get("crop_pct", 1.)))
+    if batch_size < 1 or num_batches < 1 or batch_size * num_batches > len(dataset):
+        raise ValueError("Requested full, non-overlapping batches exceed the test dataset size")
+    from itertools import islice
+    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+        shuffle=False, num_workers=0, drop_last=True)
+    for batch_index, (images, targets) in enumerate(islice(loader, num_batches)):
+        yield dict(images=images.float(), targets=targets.long(), synthetic=False,
+                   dataset="cifar10", split="test", batch_index=batch_index,
+                   indices=list(range(batch_index * batch_size, (batch_index + 1) * batch_size)),
+                   preprocessing=dict(mean=config["mean"], std=config["std"],
+                       interpolation=config.get("interpolation", "bicubic"), crop_pct=config.get("crop_pct", 1.)))
+
+
+def make_batch(data_dir, config, batch_size=32):
+    return next(iter_batches(data_dir, config, batch_size, 1))
 
 
 def main():

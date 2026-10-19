@@ -1,7 +1,9 @@
 # Gradient-Flow Jobs
 
-Reserved for future reviewed gradient-flow launchers. No job script is created or
-submitted in this organization pass.
+`run_alpha_multibatch_cifar10.sh` runs the fixed-checkpoint SAGE 25-batch alpha
+response validation and saved-output analysis, with safe resume. It launches no
+training or adaptive controller. See
+[the protocol](../../experiments/gradient_flow/MULTIBATCH.md).
 
 Use repository-relative configuration paths and runtime environment/CLI overrides
 for machine-specific dataset and environment locations. Submit from the repository
