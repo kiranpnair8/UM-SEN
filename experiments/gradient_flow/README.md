@@ -1,15 +1,19 @@
 # Gradient-Flow Research
 
+See [provisional closed-loop feasibility](CONTROLLER_FEASIBILITY.md) for the
+opt-in frozen-state response-aware prototype. Online training is not enabled.
+
 See [training-state characterization](TRAINING_STATES.md) for the audited,
-same-trajectory early/mid/late experiment and gpu006 launcher (no controller).
+same-trajectory early/mid/late experiment and gpu002 launcher (no controller).
 
 See [multi-batch causal validation](MULTIBATCH.md) for the fixed-checkpoint,
 25-batch SAGE evaluation protocol, resume rules, statistics, and Lawrence launcher.
 
 This namespace implements the first passive diagnostic stage for block-specific
 surrogate gradients and backward optimization dynamics in Spiking Transformers.
-There is no adaptive feedback controller or finalized method name. Shared model,
-surrogate and SAGE implementation files are unchanged.
+Existing diagnostic entry points remain passive and fixed-alpha by default. The
+separate recovery prototype is not a finalized method. Shared model, surrogate
+and SAGE implementation files are unchanged.
 
 Shared models and existing training pipelines remain under `spikformer/`.
 SAGE source, configurations, experiment documentation and historical outputs must

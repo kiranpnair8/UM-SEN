@@ -45,7 +45,7 @@ def same_state(a, b):
 
 
 def intervention(model, images, targets, block_ids, alpha_values, reference_alpha=4., beta=.95,
-                 amp=False, mode="train"):
+                 amp=False, mode="train", reference_alphas=None, alpha_values_by_block=None):
     """Restore caller weights, BN, gradients, mode, neuron memory and RNG even on error."""
     scope = BlockAlphas(model)
     block_ids, alpha_values = list(block_ids), list(alpha_values)
@@ -55,6 +55,12 @@ def intervention(model, images, targets, block_ids, alpha_values, reference_alph
         raise ValueError("Alphas must be finite and positive")
     if mode not in ("train", "eval"):
         raise ValueError("Mode must be train or eval")
+    centers = [reference_alpha] * len(scope.nodes) if reference_alphas is None else list(reference_alphas)
+    sweeps = {b: alpha_values for b in block_ids} if alpha_values_by_block is None else alpha_values_by_block
+    if (len(centers) != len(scope.nodes) or any(not math.isfinite(a) or a <= 0 for a in centers) or
+            set(sweeps) != set(block_ids) or any(not values or any(not math.isfinite(a) or a <= 0 for a in values)
+                                               for values in sweeps.values())):
+        raise ValueError("Require finite positive per-block centers and nonempty sweeps for exactly the requested blocks")
     caller_alpha = scope.snapshot()
     trial_alpha = caller_alpha
     images, targets = images.detach(), targets.detach()
@@ -120,7 +126,7 @@ def intervention(model, images, targets, block_ids, alpha_values, reference_alph
     def checked_trial(*args):
         try:
             result = trial(*args)
-            expected = [reference_alpha] * len(scope.nodes)
+            expected = list(centers)
             if result["target_block"] is not None:
                 expected[result["target_block"]] = result["alpha"]
             if result["block_alphas"] != expected or any(a != 4. for a in result["sps_alphas"].values()):
@@ -137,7 +143,7 @@ def intervention(model, images, targets, block_ids, alpha_values, reference_alph
     try:
         # Reference starts from exactly the requested checkpoint/block alpha state.
         # Use reference_alpha for transformer blocks and historical alpha=4 for SPS.
-        scope.set_all([reference_alpha] * len(scope.nodes))
+        scope.set_all(centers)
         trial_alpha = scope.snapshot()
         trial_alpha = {name: (4. if name.startswith("patch_embed.") else value)
                        for name, value in trial_alpha.items()}
@@ -153,16 +159,19 @@ def intervention(model, images, targets, block_ids, alpha_values, reference_alph
         check_reference(repeated)
         trials = []
         for block_id in block_ids:
-            for alpha in alpha_values:
+            for alpha in sweeps[block_id]:
                 candidate = checked_trial(block_id, alpha, initial_reference)
-                if alpha == reference_alpha:
+                if alpha == centers[block_id]:
                     check_reference(candidate)
                 trials.append(candidate)
-        return dict(baseline=baseline, trials=trials, reference_alpha=reference_alpha,
+        result = dict(baseline=baseline, trials=trials, reference_alpha=reference_alpha,
                     alpha_values=list(alpha_values), block_ids=list(block_ids), amp=amp, mode=mode,
                     direction_reference="same baseline parameter-gradient reference reset before each trial",
                     optimizer_updates=0, checks=dict(reference_reproducible=True, alpha_isolation=True,
                     weights_exactly_unchanged=True, restored_after_each_probe=True, gradients_cleared_before_each_probe=True))
+        if reference_alphas is not None or alpha_values_by_block is not None:
+            result.update(reference_alphas=centers, alpha_values_by_block=sweeps)
+        return result
     finally:
         monitor.close()
         restore_caller()

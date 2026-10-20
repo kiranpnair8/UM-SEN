@@ -1,0 +1,31 @@
+# Frozen-state feasibility only. These provisional settings are not a final method.
+seed: 42
+num_batches: 10
+batch_size: 32
+reference_alpha: 4.0
+controller:
+  enabled: true
+  interval: 200 # Reserved; no online training is enabled by this configuration.
+  delta: 0.5
+  eta: 0.25
+  regularizer: 0.0001 # Ridge inverse response, additionally limited to 0.25 alpha/iteration.
+  alpha_min: 1.0
+  alpha_max: 8.0
+  max_step: 0.25
+  reference_mode: frozen_window
+  reference_ema: 0.99
+  max_iterations: 12
+  recovery_tolerance: 0.5
+  max_abs_G: 50.0
+  max_gradient_norm: 1000000.0
+  divergence_ratio: 10.0
+  zero_tolerance: 0.0000000001
+disturbances:
+  global_plus: [5, 5, 5, 5]
+  global_minus: [3, 3, 3, 3]
+  alternating: [3, 5, 3, 5]
+gate:
+  min_batches: 10
+  min_recovered_fraction: 0.8
+  max_mean_final_ratio: 0.5
+  require_sign_reversal: true

@@ -1,5 +1,10 @@
 # Gradient-Flow Jobs
 
+`run_controller_recovery_cifar10.sh` pins gpu002 and runs only the provisional
+frozen-state recovery study and figures. It fails the job if the real-data gate
+does not pass. Online training remains deferred; see
+[the feasibility protocol](../../experiments/gradient_flow/CONTROLLER_FEASIBILITY.md).
+
 `run_alpha_state_dependence_cifar10.sh` explicitly pins gpu002. It audits historical
 milestones, conditionally regenerates one separate Fixed-SG trajectory, and reuses
 the multi-batch probe/analysis tooling across early/mid/late. See
