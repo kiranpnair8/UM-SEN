@@ -1,0 +1,45 @@
+# 60-epoch PREFIX of the released official CIFAR recipe, not a retuned cosine.
+base_config: ../../spikformer/cifar10/cifar10.yml
+data_dir: data
+output: results/gradient_flow/controller_online_seed42
+seed: 42
+deterministic: true
+fixed_alpha: 4.0
+sps_alpha: 4.0
+model_ema: false
+recovery_interval: 0
+checkpoint_hist: 1
+online:
+  epochs: 60
+  update_every_epochs: 1
+  reference_window_epochs: 5
+  probe_batch_size: 32
+  diagnostic_beta: 0.95
+  diagnostic_eps: 1.0e-12
+  tiny_response: 1.0e-4
+  controller:
+    enabled: true
+    interval: 200  # Inherited API field; ONLINE uses update_every_epochs above.
+    delta: 0.5
+    eta: 0.25
+    regularizer: 1.0e-4
+    alpha_min: 1.0
+    alpha_max: 8.0
+    max_step: 0.25
+    reference_mode: frozen_window
+    reference_ema: 0.99  # Only used if explicitly choosing ema_window.
+    max_iterations: 12  # Frozen API field; ONLINE performs ONE update, not 12.
+    recovery_tolerance: 0.5
+    max_abs_G: 50.0
+    max_gradient_norm: 1.0e+6
+    divergence_ratio: 10.0
+    zero_tolerance: 1.0e-10
+  gate:
+    max_bound_fraction: 0.20
+    max_block_pinned_fraction: 0.25
+    max_final_accuracy_drop_pp: 1.0
+    max_tiny_response_fraction: 0.50
+    max_controller_overhead_fraction: 0.20
+    max_train_loss_growth: 2.0
+    max_persistent_large_oscillation_fraction: 0.25
+    large_error_l2: 1.0
