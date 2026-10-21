@@ -105,6 +105,20 @@ means may use fewer batches. Raw traces and descriptive summary remain available
 
 ## Lawrence
 
+For completed-output gate audits, use `analysis.gradient_flow.audit_controller_recovery`.
+It verifies raw JSON hashes, rebuilds summary/figures without loading checkpoints
+or running GPU probes, and names each failed conjunctive condition. Defaults use
+NEW `controller_recovery_gate_audit_seed42` result/figure namespaces; originals
+are not overwritten. The uploaded completed run failed only the zero-oscillation
+condition in early/alternating (1/10 batches) and late/alternating (2/10 batches).
+The flags match the declared two-component-error-crossings rule even though
+total L2 error decreases monotonically in those episodes. No arithmetic bug was
+found and no gate criterion was relaxed. See the provenance-backed test fixture.
+
+```bash
+python -m analysis.gradient_flow.audit_controller_recovery
+```
+
 Current project convention is gpu002, partition gpu, one GPU, 16CPUs, 64G and
 maximum two days. No account/QoS/module is invented. The launcher activates the
 existing snn environment, prints provenance, locks the writer, runs recovery and

@@ -13,8 +13,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def plot(run_dir, output_dir):
-    run_dir, output_dir = Path(run_dir), Path(output_dir)
+def load_saved_records(run_dir):
+    """Validate the completed JSON collection without touching checkpoints/probes."""
+    run_dir = Path(run_dir)
     if json.loads((run_dir / "status.json").read_text()).get("status") != "complete":
         raise ValueError("Recovery must finish before plotting combined results")
     metadata = json.loads((run_dir / "metadata.json").read_text())
@@ -32,6 +33,14 @@ def plot(run_dir, output_dir):
             cases.extend(json.loads(path.read_text()))
     if not cases:
         raise ValueError("No completed recovery cases")
+    return metadata, summary, cases
+
+
+def plot(run_dir, output_dir, summary_path=None):
+    run_dir, output_dir = Path(run_dir), Path(output_dir)
+    metadata, summary, cases = load_saved_records(run_dir)
+    if summary_path is not None:
+        summary = json.loads(Path(summary_path).read_text())
     output_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.size": 10, "axes.grid": True, "grid.alpha": .25, "savefig.dpi": 300})
     states = list(summary["groups"])
@@ -111,12 +120,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", default="results/gradient_flow/controller_recovery_seed42")
     parser.add_argument("--output-dir", default="figures/gradient_flow/controller_recovery_seed42")
+    parser.add_argument("--summary", help="Optional probe-free regenerated summary; raw records still hash-validated")
     args = parser.parse_args()
     output = (ROOT / args.output_dir).resolve()
     namespace = ROOT / "figures/gradient_flow"
     if namespace.resolve() != namespace or not output.is_relative_to(namespace) or output == namespace:
         parser.error("Figures must use a separate figures/gradient_flow/<run-id> namespace")
-    plot(ROOT / args.run_dir, output)
+    plot(ROOT / args.run_dir, output, args.summary)
 
 
 if __name__ == "__main__":
