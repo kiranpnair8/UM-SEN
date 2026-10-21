@@ -67,6 +67,9 @@ def summarize_condition(rows, settings):
         probe_G_variance=[variance([r["G"][b] for r in controllers]) for b in range(blocks)],
         loss_tail_head_ratio=mean(loss_tail)/max(mean(loss_head), 1e-12),
         nonfinite_or_state_failures=0,  # Only complete, assertion-validated epochs enter this function.
+        amp_overflow_skips=sum(r.get("amp", {}).get("overflows", 0) for r in rows),
+        invalid_diagnostic_batches=sum(r.get("amp", {}).get("invalid_diagnostics", 0) for r in rows),
+        amp_interpretation="Recoverable GradScaler overflows are skipped updates, not model/state failures; invalid observations excluded",
         gradient_variance_definition="population variance of epoch means; within-epoch norm CV separately reported")
 
 

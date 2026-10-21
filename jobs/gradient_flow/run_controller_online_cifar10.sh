@@ -49,13 +49,17 @@ print('Reviewed online protocol:', c['online'])
 print('Training prefix: 60 epochs; inherited cosine recipe:', c['epochs'], 'epochs +', c['cooldown_epochs'], 'cooldown')
 PY
 ACTIVE_PID=""
+AMP_RESUME=()
+if [[ "${ALLOW_AMP_RESUME:-0}" == 1 ]]; then
+  AMP_RESUME=(--allow-amp-semantics-resume)
+fi
 trap 'if [[ -n "${ACTIVE_PID}" ]]; then kill -USR1 "${ACTIVE_PID}" 2>/dev/null || true; fi' USR1
 for CONDITION in fixed response_aware random_matched; do
   LOG="logs/gradient_flow/controller_online_${CONDITION}_${SLURM_JOB_ID:-interactive}.log"
   echo "Running/resuming ${CONDITION}; log=${LOG}"
   python -u -m experiments.gradient_flow.online_train --config "${CONFIG}" \
     --condition "${CONDITION}" --data-dir "${DATA_DIR:-data}" --output "${RUN_DIR}" \
-    --device cuda --backend cupy --expected-commit "${COMMIT}" --resume > >(tee -a "${LOG}") 2>&1 &
+    --device cuda --backend cupy --expected-commit "${COMMIT}" --resume "${AMP_RESUME[@]}" > >(tee -a "${LOG}") 2>&1 &
   ACTIVE_PID=$!
   RC=0
   wait "${ACTIVE_PID}" || RC=$?

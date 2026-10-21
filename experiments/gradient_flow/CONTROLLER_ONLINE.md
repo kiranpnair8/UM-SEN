@@ -130,9 +130,89 @@ absolute response and update-magnitude distributions. Positive indicators (mean
 loss, mean/best/final validation top1, G variance) do not change the hard gate.
 Synthetic smoke results cannot pass this real-experiment gate.
 
-NaN/Inf, unsafe gradient norms/G, alpha/state/provenance violations abort before
-further optimizer updates where detected. A catastrophic run stops the launcher;
-no hyperparameter tuning or replacement run is launched automatically.
+Nonfinite loss, FP32 parameter gradients, unsafe valid-observation norms/G, or
+alpha/state/provenance violations abort. Native AMP nonfinite gradients are
+handled as below, not mistaken for a whole-run failure. A catastrophic run stops
+the launcher; no tuning or replacement run is launched automatically.
+
+## AMP Overflow Correction and Historical Continuation
+
+The initial wrapper at d872125 raised before native GradScaler.step/update when
+ANY parameter gradient was nonfinite OR ANY monitor block was invalid. These are
+different conditions. That generic exception cannot retrospectively identify
+which occurred at epoch7. Healthy epochs0--6 are not invalidated by this defect.
+Inspection of timm NativeScaler and PyTorch GradScaler confirms that the official
+path normally SKIPS the optimizer step and backs off the loss scale for a
+nonfinite parameter-gradient batch. Such an event alone is not proof of model
+instability. The corrected wrapper unscales once and preserves that native path.
+
+- Finite loss + nonfinite parameter gradients under enabled native AMP: call
+  scaler.step/update, assert the optimizer was NOT invoked, discard the entire
+  batch's gradient statistics/EMA update, log the skip and before/after scale.
+- Finite parameters + invalid monitor records: distinguish instrumentation
+  failure from parameter overflow. Preserve the official optimizer/scaler update,
+  quarantine ALL gradient observations for that batch (including otherwise valid
+  blocks), and do not update the diagnostic EMA. Do not falsely label it an AMP skip.
+- Nonfinite loss fails immediately, as do nonfinite FP32 gradients. Finite valid
+  observations still pass the existing gradient/G safety bounds before stepping.
+- Native forward effects (e.g. BN updates), training loss/accuracy accumulation,
+  scheduler batch counting and neuron reset are preserved even on AMP skips.
+
+Predeclared defaults in amp_safety.py (not fitted to the failed minibatch): fail
+after8 consecutive AMP overflows, or >20% overflow in a FULL100-batch rolling
+window; fail after5 consecutive invalid-monitor batches with finite parameters.
+The eighth threshold-triggering overflow is still natively skipped/backed off
+before the run aborts. Optional online.amp_safety config keys can override these
+for a NEW protocol; changing configuration is NOT permitted for this continuation.
+Counters/window are checkpointed, not reset to hide failures on resume. A legacy
+successful prefix is known all-finite/all-valid because the old wrapper would
+otherwise have aborted; its saved step count initializes successful history.
+An existing persistent-overflow/diagnostic or nonfinite-loss/FP32 failure marker
+also blocks blind resume from an older checkpoint; it requires manual review.
+
+`amp_policy.json` records effective policy and actual implementation source.
+`amp_events.jsonl` is append-only and flushed/fsynced on exceptional batches. It
+records epoch, zero-based epoch batch, global step, scale before/after, overflow,
+actual optimizer invocation/skip, invalid/statistics-included flags, every named
+NaN/Inf parameter with counts and block ID, and invalid block norms/reasons.
+No invalid observations enter epoch gradient aggregates. Epoch `amp` counters and
+condition summaries report recoverable skips separately from hard model/state
+failures. Monitoring-disabled AMP follows the same native update/skip behavior.
+
+Explicit continuation from d872125 (no restart or retroactive relabeling):
+
+```bash
+git pull --ff-only origin gradient-flow-stage1-validation
+sbatch --export=ALL,ALLOW_AMP_RESUME=1 jobs/gradient_flow/run_controller_online_cifar10.sh
+```
+
+Or, inside an existing GPU allocation, resume ONLY Fixed:
+
+```bash
+python -m experiments.gradient_flow.online_train --condition fixed --resume \
+  --allow-amp-semantics-resume --device cuda --backend cupy
+```
+
+The compatibility path checks ancestry and an exact AMP-only changed-file
+allowlist, identical configuration/runtime/probe fingerprint, Fixed alpha4,
+contiguous successful epoch metrics, matching checkpoint metrics, and complete
+optimizer/native scaler/scheduler/RNG continuation state. It rejects arbitrary
+source/config changes and weights-only initialization. Epoch6's full checkpoint
+and prefix args/config/provenance/metrics/status are protected as hashed
+`amp_resume_origin_*` copies before normal continuation writes. Epoch7 restarts
+from epoch6's checkpoint, not from random initialization. No unavailable HPC
+artifacts have been copied/edited by Codex; these checks/copies occur on Lawrence
+only when the user explicitly runs the resume command.
+
+`amp_compatibility.json` records the original study identity, protected-prefix
+hashes and actual patch commit. Original provenance/config/checkpoints are not
+silently relabeled to the new commit. `continuation_provenance.json`, per-epoch
+implementation_commit and checkpoint implementation_source retain the new code
+lineage. Subsequent paired conditions under this same namespace require the
+explicit flag and adopt the original STUDY identity for comparison, while their
+actual source is recorded separately. Existing all-finite prefix values remain
+unchanged; the original frozen-study and online feasibility thresholds are NOT
+relaxed. No automatic tuning/retry is performed.
 
 ## Commands
 

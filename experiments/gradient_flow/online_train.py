@@ -67,6 +67,9 @@ def prepare(args, config):
     identity = dict(source_commit=source.get("commit"), training_signature=signature,
                     batch_fingerprint=batch_fingerprint(batch), method=args.condition, synthetic=args.smoke,
                     runtime={k: source.get(k) for k in ("torch", "cuda", "packages")})
+    from .amp_resume import reconcile
+    identity, transition = reconcile(root, identity, config, source,
+        getattr(args, "allow_amp_semantics_resume", False), load_checkpoint)
     checkpoint = None
     if destination.exists():
         if not args.resume:
@@ -74,6 +77,11 @@ def prepare(args, config):
         record = json.loads((destination/"provenance.json").read_text())
         if record["identity"] != identity:
             raise ValueError("Existing output provenance/config/commit mismatch")
+        status_path = destination/"status.json"
+        previous_status = json.loads(status_path.read_text()) if status_path.exists() else {}
+        if previous_status.get("status") == "failed" and any(message in previous_status.get("error", "") for message in
+                ("Persistent AMP overflow", "Persistent invalid diagnostics", "Nonfinite training loss", "Nonfinite FP32")):
+            raise ValueError("Previous persistent/model failure requires manual review; refusing blind replay from an older checkpoint")
         checkpoint = load_checkpoint(destination/"last.pth.tar")
         saved = checkpoint.get("gradient_flow_online", {})
         if saved.get("identity") != identity:
@@ -100,6 +108,11 @@ def prepare(args, config):
             probe="FP32/eval, first sequential training-split batch, hard targets, no augmentation",
             reference="local nonzero reference held across configured windows; never a G=0 objective",
             condition=args.condition, command=sys.argv))
+    if transition is not None:
+        write_json(destination/"continuation_provenance.json", dict(original_identity=identity,
+            implementation_source=source, compatibility=transition,
+            source_checkpoint_epoch=None if checkpoint is None else checkpoint["epoch"],
+            preservation="original config/provenance/checkpoint prefix not relabeled or rewritten"))
     matched = None
     if args.condition == "random_matched":
         parent = root/"response_aware"
@@ -272,6 +285,8 @@ def main():
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--allow-amp-semantics-resume", action="store_true",
+                        help="Explicit audited continuation of the d872125 all-finite Fixed prefix; no recipe changes")
     parser.add_argument("--expected-commit")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--backend", choices=("torch", "cupy"), default="cupy")
