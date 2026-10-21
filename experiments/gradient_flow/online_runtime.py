@@ -237,6 +237,10 @@ class OnlineRuntime:
                     **{"train_"+k: r["train"][k] for k in ("loss", "top1", "top5")},
                     **{"val_"+k: r["validation"][k] for k in ("loss", "top1", "top5")}))
         temp.replace(d/"metrics.csv")
+        if (d/"last.pth.tar").is_file():
+            from .online_checkpoint import digest
+            write_json(d/"checkpoint_integrity.json", dict(identity=self.identity,
+                epoch=self.rows[-1]["epoch"], sha256=digest(d/"last.pth.tar")))
         write_json(d/"status.json", dict(status="complete" if complete else "running", epochs=len(self.rows), identity=self.identity))
 
     def close(self):

@@ -6,12 +6,22 @@ import math
 from pathlib import Path
 import subprocess
 import shutil
+import os
+from contextlib import contextmanager
 
 from .amp_safety import DEFAULT_SAFETY
 from .common import ROOT, write_json
 
 
 LEGACY_COMMIT = "d8721251988691af90a7e01d5e4ff12cdd4571a8"
+AMP_FIX_COMMIT = "9a9c0a77773b8e962fe90f2558224033d1140c43"
+RESUME_FILES = {
+    "experiments/gradient_flow/amp_resume.py", "experiments/gradient_flow/online_checkpoint.py",
+    "experiments/gradient_flow/validate_online_resume.py", "experiments/gradient_flow/online_train.py",
+    "experiments/gradient_flow/online_runtime.py", "experiments/gradient_flow/CONTROLLER_ONLINE.md",
+    "jobs/gradient_flow/run_controller_online_cifar10.sh", "tests/gradient_flow/test_online_checkpoint.py",
+    "tests/gradient_flow/test_online_controller.py",
+}
 ALLOWED_FILES = {
     "experiments/gradient_flow/amp_safety.py", "experiments/gradient_flow/amp_resume.py",
     "experiments/gradient_flow/online_runtime.py", "experiments/gradient_flow/online_train.py",
@@ -27,6 +37,67 @@ def verify_patch(current):
     if not files or not files <= ALLOWED_FILES:
         raise ValueError("AMP continuation refuses unrelated changes: "+str(sorted(files-ALLOWED_FILES)))
     return sorted(files)
+
+
+def verify_resume_patch(current):
+    git = ["git", "-c", "safe.directory="+ROOT.as_posix(), "-C", str(ROOT)]
+    parents = subprocess.check_output(git+["show", "-s", "--format=%P", current], text=True).strip()
+    title = subprocess.check_output(git+["show", "-s", "--format=%s", current], text=True).strip()
+    files = set(subprocess.check_output(git+["diff", "--name-only", AMP_FIX_COMMIT, current], text=True).splitlines())
+    if (parents != AMP_FIX_COMMIT or title != "fix: allow validated full-state online checkpoint resume" or
+            not files or not files <= RESUME_FILES or "experiments/gradient_flow/online_checkpoint.py" not in files):
+        raise ValueError("Not the reviewed single resume-only patch; arbitrary later commits are refused")
+    verify_patch(AMP_FIX_COMMIT)
+    return sorted(files)
+
+
+def patch_lineage(record, current):
+    if current == record["implementation_commit"]:
+        verify_patch(current)
+        return [LEGACY_COMMIT, current]
+    if record["implementation_commit"] != AMP_FIX_COMMIT:
+        raise ValueError("Unexpected existing compatibility implementation commit")
+    verify_resume_patch(current)
+    return [LEGACY_COMMIT, AMP_FIX_COMMIT, current]
+
+
+@contextmanager
+def lineage_lock(root):
+    with (Path(root)/".amp_resume_lineage.lock").open("a+b") as stream:
+        if os.name == "nt":
+            import msvcrt
+            if stream.seek(0, 2) == 0:
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def preserve_lineage(root, record, current):
+    """New immutable sidecar; never rewrite amp_compatibility.json/protected files."""
+    lineage = patch_lineage(record, current)
+    if len(lineage) < 3:
+        return
+    payload = dict(patch_lineage=lineage, original_marker_sha256=digest(Path(root)/"amp_compatibility.json"),
+                   original_fixed_identity=record["original_fixed_identity"], reviewed_resume_files=verify_resume_patch(current))
+    destination = Path(root)/("amp_resume_lineage_"+current+".json")
+    with lineage_lock(root):
+        if destination.exists():
+            if json.loads(destination.read_text()) != payload:
+                raise ValueError("Existing immutable lineage sidecar disagrees")
+        else:
+            write_json(destination, payload)
 
 
 def digest(path):
@@ -76,13 +147,13 @@ def reconcile(root, proposed, config, source, allowed, load_checkpoint):
     legacy = json.loads(fixed_provenance.read_text())["identity"] if fixed_provenance.exists() else None
     if marker.exists():
         record = json.loads(marker.read_text())
-        if not allowed or record["implementation_commit"] != source["commit"] or record["legacy_commit"] != LEGACY_COMMIT:
+        if not allowed or record["legacy_commit"] != LEGACY_COMMIT:
             raise ValueError("Explicit --allow-amp-semantics-resume and the recorded patch commit are required")
-        verify_patch(source["commit"])
+        lineage = patch_lineage(record, source["commit"])
         expected = {**record["original_fixed_identity"], "method": proposed["method"]}
         if not compatible_identity(expected, proposed):
             raise ValueError("AMP continuation config/runtime/batch/method mismatch")
-        return expected, record
+        return expected, dict(record, approved_patch_lineage=lineage)
     if legacy is None or legacy["source_commit"] == proposed["source_commit"]:
         return proposed, None
     if not allowed or proposed["method"] != "fixed" or legacy["source_commit"] != LEGACY_COMMIT:

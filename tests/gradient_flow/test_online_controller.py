@@ -16,6 +16,11 @@ from experiments.gradient_flow.online_runtime import OnlineRuntime, TrainingMetr
 from analysis.gradient_flow.online_summary import summarize_condition, feasibility_gate
 
 
+def load_checkpoint(path):
+    # Unit fixtures written immediately above by these tests, never CLI inputs.
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
 def settings():
     return load_config(ROOT/"configs/gradient_flow/controller_online.yml")["online"]
 
@@ -283,7 +288,7 @@ def test_scaled_activation_and_parameter_measurements_unscale_exactly_once(tmp_p
 
 
 def test_interrupted_smoke_resume_matches_uninterrupted_weights_and_controller(tmp_path, monkeypatch):
-    from experiments.gradient_flow.online_train import run_smoke, load_checkpoint
+    from experiments.gradient_flow.online_train import run_smoke
     config = load_config(ROOT/"configs/gradient_flow/controller_online.yml")
     _, batch = model_batch()
     args = SimpleNamespace(device="cpu", backend="torch", smoke_epochs=2, condition="response_aware")
@@ -317,7 +322,7 @@ def test_interrupted_smoke_resume_matches_uninterrupted_weights_and_controller(t
 def test_cuda_online_amp_smoke(tmp_path, backend):
     if backend == "cupy":
         pytest.importorskip("cupy")
-    from experiments.gradient_flow.online_train import run_smoke, load_checkpoint
+    from experiments.gradient_flow.online_train import run_smoke
     config = load_config(ROOT/"configs/gradient_flow/controller_online.yml")
     _, batch = model_batch()
     args = SimpleNamespace(device="cuda", backend=backend, smoke_epochs=2, condition="response_aware")
@@ -327,7 +332,7 @@ def test_cuda_online_amp_smoke(tmp_path, backend):
 
 
 def test_smoke_checkpoint_resume_plotting_and_synthetic_gate(tmp_path):
-    from experiments.gradient_flow.online_train import run_smoke, load_checkpoint
+    from experiments.gradient_flow.online_train import run_smoke
     from analysis.gradient_flow.plot_controller_online import plot
     config = load_config(ROOT/"configs/gradient_flow/controller_online.yml")
     batch = dict(images=torch.randn(2, 3, 8, 8, generator=torch.Generator().manual_seed(420)), targets=torch.tensor([1, 2]))
@@ -361,7 +366,7 @@ def test_official_epoch_wrapper_saver_and_interrupted_resume(tmp_path, monkeypat
     if str(CIFAR) not in sys.path:
         sys.path.insert(0, str(CIFAR))
     import train as official
-    from experiments.gradient_flow.online_train import run_official, load_checkpoint
+    from experiments.gradient_flow.online_train import run_official
     config = load_config(ROOT/"configs/gradient_flow/controller_online.yml")
     config["online"]["epochs"] = 2
     model, batch = model_batch()
@@ -422,8 +427,10 @@ def test_official_epoch_wrapper_saver_and_interrupted_resume(tmp_path, monkeypat
 
 def test_prepare_refuses_provenance_drift_and_skips_only_consistent_complete_runs(tmp_path, monkeypatch):
     from experiments.gradient_flow import online_train as entry
+    from experiments.gradient_flow import online_checkpoint as trusted
     config = load_config(ROOT/"configs/gradient_flow/controller_online.yml")
     monkeypatch.setattr(entry, "ROOT", tmp_path)
+    monkeypatch.setattr(trusted, "ROOT", tmp_path)
     source = dict(commit="synthetic-unit-test", dirty=False, torch="test", cuda=None, packages={"timm": "test"})
     monkeypatch.setattr(entry, "provenance", lambda: copy.deepcopy(source))
     args = SimpleNamespace(expected_commit=None, smoke=True, device="cpu", backend="torch", condition="fixed",
@@ -431,7 +438,9 @@ def test_prepare_refuses_provenance_drift_and_skips_only_consistent_complete_run
     directory, batch, identity, _, _, complete = entry.prepare(args, config)
     assert not complete
     rows = [dict(epoch=epoch, controller={}) for epoch in range(2)]
-    torch.save(dict(gradient_flow_online=dict(identity=identity, rows=rows)), directory/"last.pth.tar")
+    torch.save(dict(version=2, epoch=1, gradient_flow_online=dict(identity=identity, rows=rows)), directory/"last.pth.tar")
+    (directory/"checkpoint_integrity.json").write_text(json.dumps(dict(identity=identity, epoch=1,
+        sha256=trusted.digest(directory/"last.pth.tar"))))
     (directory/"model_best.pth.tar").write_bytes(b"unit-test-existence-marker-not-model")
     (directory/"metrics.json").write_text(json.dumps(rows))
     (directory/"controller_metrics.json").write_text(json.dumps([{}, {}]))
@@ -443,5 +452,5 @@ def test_prepare_refuses_provenance_drift_and_skips_only_consistent_complete_run
         entry.prepare(args, config)
     source["packages"]["timm"] = "test"
     (directory/"metrics.json").write_text(json.dumps(rows[:1]))
-    with pytest.raises(ValueError, match="published output disagree"):
+    with pytest.raises(ValueError, match="contiguous committed prefix"):
         entry.prepare(args, config)

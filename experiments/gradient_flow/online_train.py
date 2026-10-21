@@ -31,9 +31,15 @@ def request_pause(*unused):
     STOP_REQUESTED = True
 
 
-def load_checkpoint(path):
-    from experiment_state import load_trusted_checkpoint
-    return load_trusted_checkpoint(path)
+def load_checkpoint(path, authorization=None):
+    if authorization is not None:
+        from .online_checkpoint import OnlineCheckpoint
+        if not isinstance(authorization, OnlineCheckpoint):
+            raise ValueError("Invalid online checkpoint authorization")
+        authorization.check(path)
+        return authorization.load()
+    # Model-only/general calls remain safe. Never retry a failed safe load unsafely.
+    return torch.load(path, map_location="cpu", weights_only=True)
 
 
 def prepare(args, config):
@@ -70,6 +76,10 @@ def prepare(args, config):
     from .amp_resume import reconcile
     identity, transition = reconcile(root, identity, config, source,
         getattr(args, "allow_amp_semantics_resume", False), load_checkpoint)
+    if args.condition == "random_matched":
+        parent_status = root/"response_aware/status.json"
+        if not parent_status.is_file() or json.loads(parent_status.read_text()).get("status") != "complete":
+            raise ValueError("Random control requires a completed response-aware magnitude schedule before creating outputs")
     checkpoint = None
     if destination.exists():
         if not args.resume:
@@ -82,7 +92,10 @@ def prepare(args, config):
         if previous_status.get("status") == "failed" and any(message in previous_status.get("error", "") for message in
                 ("Persistent AMP overflow", "Persistent invalid diagnostics", "Nonfinite training loss", "Nonfinite FP32")):
             raise ValueError("Previous persistent/model failure requires manual review; refusing blind replay from an older checkpoint")
-        checkpoint = load_checkpoint(destination/"last.pth.tar")
+        from .online_checkpoint import authorize
+        args._checkpoint_authorization = authorize(destination, identity, config, resume=args.resume,
+            allow_amp=getattr(args, "allow_amp_semantics_resume", False))
+        checkpoint = load_checkpoint(destination/"last.pth.tar", args._checkpoint_authorization)
         saved = checkpoint.get("gradient_flow_online", {})
         if saved.get("identity") != identity:
             raise ValueError("Checkpoint provenance mismatch")
@@ -109,6 +122,8 @@ def prepare(args, config):
             reference="local nonzero reference held across configured windows; never a G=0 objective",
             condition=args.condition, command=sys.argv))
     if transition is not None:
+        from .amp_resume import preserve_lineage
+        preserve_lineage(root, transition, source["commit"])
         write_json(destination/"continuation_provenance.json", dict(original_identity=identity,
             implementation_source=source, compatibility=transition,
             source_checkpoint_epoch=None if checkpoint is None else checkpoint["epoch"],
@@ -131,7 +146,7 @@ def prepare(args, config):
 def run_official(args, config, destination, batch, identity, checkpoint, matched):
     import train as official
     original = {key: getattr(official, key) for key in
-                ("_parse_args", "create_scheduler", "train_one_epoch", "validate", "CheckpointSaver")}
+                ("_parse_args", "create_scheduler", "train_one_epoch", "validate", "CheckpointSaver", "resume_checkpoint")}
     runtime = None
     old_argv = sys.argv
     stop = config["online"]["epochs"]
@@ -156,7 +171,11 @@ def run_official(args, config, destination, batch, identity, checkpoint, matched
     class OnlineSaver(original["CheckpointSaver"]):
         def _save(self, path, epoch, metric=None):
             super()._save(path, epoch, metric)
-            saved = load_checkpoint(path)
+            # Internal just-created timm save file, not a caller-supplied resume path.
+            from experiment_state import load_trusted_checkpoint
+            if Path(path).absolute().parent != destination.absolute():
+                raise ValueError("Unexpected internally generated checkpoint path")
+            saved = load_trusted_checkpoint(path)
             saved["gradient_flow_online"] = runtime.state_dict()
             torch.save(saved, path)
 
@@ -191,7 +210,14 @@ def run_official(args, config, destination, batch, identity, checkpoint, matched
         runtime.finish_epoch(runtime.training, result)
         return result
 
+    trusted_resume = None
+    if checkpoint is not None:
+        from .online_checkpoint import scoped_timm_resume
+        trusted_resume = scoped_timm_resume(original["resume_checkpoint"],
+            getattr(args, "_checkpoint_authorization", None))
     official._parse_args, official.create_scheduler = parse, scheduler
+    if trusted_resume is not None:
+        official.resume_checkpoint = trusted_resume
     official.train_one_epoch, official.validate, official.CheckpointSaver = train_epoch, validate, OnlineSaver
     sys.argv = [old_argv[0], "--config", str(ROOT/args.config), "-data-dir", config["data_dir"],
                 "--output", str(destination.parent), "--experiment", destination.name]
@@ -287,6 +313,8 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-amp-semantics-resume", action="store_true",
                         help="Explicit audited continuation of the d872125 all-finite Fixed prefix; no recipe changes")
+    parser.add_argument("--validate-resume-only", action="store_true",
+                        help="Read-only full-state restoration check; no forwards, updates or study writes")
     parser.add_argument("--expected-commit")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--backend", choices=("torch", "cupy"), default="cupy")
@@ -303,6 +331,12 @@ def main():
     if args.data_dir:
         config["data_dir"] = args.data_dir
     args.output = args.output or ("results/gradient_flow/controller_online_smoke_seed42" if args.smoke else config["output"])
+    if args.validate_resume_only:
+        if not args.resume or args.smoke:
+            parser.error("Read-only validation requires --resume on the real study")
+        from .validate_online_resume import validate
+        validate(args, config)
+        return
     destination = None
     previous_signal = signal.signal(signal.SIGUSR1, request_pause) if hasattr(signal, "SIGUSR1") else None
     try:

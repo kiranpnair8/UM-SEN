@@ -286,3 +286,93 @@ This design tests only short online feasibility with a small reused training
 probe and diagonal feedback. It cannot establish generalization across seeds,
 datasets, architectures, optimal G targets, full-Jacobian control or SOTA accuracy.
 Optional learnable alpha is deliberately omitted; no SAGE behavior is modified.
+
+## Reviewed Trusted Full-State Resume (timm 1.0.28)
+
+The installed 1.0.28 wheel was inspected directly. Its public signature is:
+
+```python
+resume_checkpoint(model, checkpoint_path, optimizer=None, loss_scaler=None,
+                  log_info=True, weights_only=True)
+```
+
+The official trainer omits weights_only, so the safe unpickler rejects auxiliary
+Python objects in our full training files (e.g. Namespace/NumPy RNG), before the
+model/optimizer resume completes. This is not a training or controller failure.
+The new ONLINE-only wrapper explicitly passes weights_only=False AFTER validating
+the exact local condition checkpoint. Generic timm/model-only loading and the
+shared train.py remain unchanged. There is NO safe-to-unsafe retry or global
+allowlist/environment override. Unsupported timm APIs fail explicitly.
+
+Trust boundary: operator-controlled, locally generated study artifacts and their
+independently recorded hashes/provenance, not downloaded or arbitrary pickle files.
+A hash detects corruption/substitution; it does not authenticate a directory
+against an attacker able to rewrite BOTH the data and every trust record.
+Real full-state resume is limited to
+results/gradient_flow/controller_online_seed42/<condition>/last.pth.tar,
+requires --resume, matching config/identity/runtime/batch, no symlink redirection,
+and a verified hash before full deserialization. The historical epoch6 case also
+requires --allow-amp-semantics-resume and its existing protected marker/copies.
+New locally published epochs have checkpoint_integrity.json written after the
+checkpoint and metrics. Unvalidated or model-only calls use weights_only=True
+and never silently fall back. The existing saver still reads its own just-created
+internal temporary file for enrichment; this is not a caller-controlled resume path.
+
+The original amp_compatibility.json is NOT deleted, reset or rewritten. The second
+reviewed patch must be a direct child of AMP-fix9a9c0a7 with the exact reviewed
+commit title and a resume/infrastructure-only file allowlist. Changed controller,
+model, recipe files, merges, and arbitrary later commits are refused. The original
+AMP patch is also verified against d872125. A NEW immutable sidecar records:
+
+```text
+d872125 -> 9a9c0a7 -> <reviewed trusted-resume commit>
+```
+
+The sidecar hashes the original marker; a short cross-process metadata lock makes
+concurrent condition enrollment idempotent. All protected amp_resume_origin_*
+files/hashes remain untouched. Existing epoch0--6 data retain their study identity;
+actual implementation commits remain in continuation metadata/checkpoints.
+Missing/corrupt historical trust evidence requires manual provenance review,
+NOT automatic unsafe enrollment, marker recreation or a restart from scratch.
+
+Inside an existing GPU allocation, first validate the real file read-only:
+
+```bash
+python -m experiments.gradient_flow.online_train --condition fixed --resume \
+  --allow-amp-semantics-resume --validate-resume-only --device cuda --backend cupy
+```
+
+This checks the actual marker/hashes, full-deserializes with explicit trust,
+constructs restoration TARGET objects, restores model/optimizer/scheduler/native
+scaler/RNG/diagnostic/controller state and compares it exactly. No initialization
+state is used for training. It prints checkpoint_epoch=6, online_rows=7,
+next_epoch=7 plus individual restoration checks, marker presence and patch lineage.
+It performs ZERO forwards/backwards/optimizer steps and ZERO study-file writes;
+temporary runtime metadata lives outside the study. This is a CUDA restoration
+smoke, not a GPU training-throughput/accuracy test. No epochs0--6 are rerun.
+
+After this passes, parallel conditions can be submitted separately:
+
+```bash
+sbatch --nodelist=gpu002 --export=ALL,CONDITIONS=fixed,ALLOW_AMP_RESUME=1 jobs/gradient_flow/run_controller_online_cifar10.sh
+sbatch --nodelist=gpu006 --export=ALL,CONDITIONS=response_aware,ALLOW_AMP_RESUME=1 jobs/gradient_flow/run_controller_online_cifar10.sh
+```
+
+Node overrides follow the actual one-node SLURM allocation, not a hard-coded
+hostname check. Both use the unchanged48-hour cap,64G,16 CPUs and snn activation.
+The launcher uses PER-CONDITION writer locks, so different conditions do not block
+each other; two writers for the same condition still fail. Default CONDITIONS
+remains all three sequentially. Analysis is deferred until all three complete.
+
+RANDOM_MATCHED IS DEPENDENT: it replays the completed RESPONSE_AWARE magnitude
+schedule, so it must NOT start concurrently with an unfinished RESPONSE_AWARE.
+Capture the RA job ID using sbatch --parsable, then submit for example:
+
+```bash
+sbatch --dependency=afterok:<RA_JOB_ID> --export=ALL,CONDITIONS=random_matched,ALLOW_AMP_RESUME=1 jobs/gradient_flow/run_controller_online_cifar10.sh
+```
+
+It can overlap any still-running Fixed job after RA completes. Its Python and
+launcher preflights both enforce the dependency. No hyperparameters or magnitude
+matching rules were changed for concurrency. Do not change the checkout while
+jobs are running. None of these commands were launched by Codex.

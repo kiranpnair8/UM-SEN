@@ -20,12 +20,12 @@ echo "Source commit: ${COMMIT}"
 git status --short
 [[ -z "$(git status --porcelain)" ]] || { echo "Refusing dirty checkout" >&2; exit 2; }
 [[ "$(git branch --show-current)" == "gradient-flow-stage1-validation" ]] || { echo "Wrong branch" >&2; exit 2; }
-[[ "$(hostname -s)" == "gpu002" ]] || { echo "This launcher requires gpu002" >&2; exit 2; }
+if [[ -n "${SLURM_JOB_NODELIST:-}" ]]; then
+  [[ "$(hostname -s)" == "$(scontrol show hostnames "${SLURM_JOB_NODELIST}")" ]] || { echo "Wrong allocated host" >&2; exit 2; }
+fi
 [[ "${EXPECTED_COMMIT:-${COMMIT}}" == "${COMMIT}" ]] || { echo "Unexpected commit" >&2; exit 2; }
 command -v flock >/dev/null
 mkdir -p logs/gradient_flow
-exec 9>logs/gradient_flow/controller_online.lock
-flock -n 9 || { echo "Another online writer is active" >&2; exit 2; }
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${SNN_ENV:-/home/rizk_lab/shared/kiran/envs/snn}"
 python --version
@@ -54,7 +54,17 @@ if [[ "${ALLOW_AMP_RESUME:-0}" == 1 ]]; then
   AMP_RESUME=(--allow-amp-semantics-resume)
 fi
 trap 'if [[ -n "${ACTIVE_PID}" ]]; then kill -USR1 "${ACTIVE_PID}" 2>/dev/null || true; fi' USR1
-for CONDITION in fixed response_aware random_matched; do
+for CONDITION in ${CONDITIONS:-fixed response_aware random_matched}; do
+  case "${CONDITION}" in fixed|response_aware|random_matched) ;; *) echo "Unknown condition" >&2; exit 2 ;; esac
+  exec 9>"logs/gradient_flow/controller_online_${CONDITION}.lock"
+  flock -n 9 || { echo "Another ${CONDITION} writer is active" >&2; exit 2; }
+  if [[ "${CONDITION}" == random_matched ]]; then
+    python - "${RUN_DIR}/response_aware/status.json" <<'PY'
+import json
+import sys
+assert json.load(open(sys.argv[1]))['status'] == 'complete', 'RANDOM_MATCHED requires completed RESPONSE_AWARE magnitudes'
+PY
+  fi
   LOG="logs/gradient_flow/controller_online_${CONDITION}_${SLURM_JOB_ID:-interactive}.log"
   echo "Running/resuming ${CONDITION}; log=${LOG}"
   python -u -m experiments.gradient_flow.online_train --config "${CONFIG}" \
@@ -75,7 +85,23 @@ for CONDITION in fixed response_aware random_matched; do
     exit 75
   fi
   [[ "${RC}" == 0 ]] || { echo "${CONDITION} failed (${RC}); stopping without retry/tuning" >&2; exit "${RC}"; }
+  flock -u 9
 done
+READY=$(python - "${RUN_DIR}" <<'PY'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+paths = [root/m/'status.json' for m in ('fixed', 'response_aware', 'random_matched')]
+print(int(all(p.is_file() and json.loads(p.read_text()).get('status') == 'complete' for p in paths)))
+PY
+)
+if [[ "${READY}" != 1 ]]; then
+  echo "Selected condition(s) completed; aggregate analysis waits for all three."
+  exit 0
+fi
+exec 8>logs/gradient_flow/controller_online_analysis.lock
+flock -n 8 || { echo "Another analysis writer is active"; exit 0; }
 python -u -m analysis.gradient_flow.plot_controller_online --run-dir "${RUN_DIR}" --output-dir "${FIGURE_DIR}"
 python - "${RUN_DIR}/summary.json" <<'PY'
 import json
