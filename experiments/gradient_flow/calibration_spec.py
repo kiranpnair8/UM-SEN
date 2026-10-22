@@ -74,7 +74,7 @@ def training_invariants(identity):
         "runtime", "synthetic", "study_config_hash", "seed", "dataset", "amp_safety", "backend", "smoke_epochs")}
 
 
-def checked_directory(path, *, complete=True, epochs=60):
+def checked_directory(path, *, complete=True, epochs=60, require_epoch_provenance=True):
     path = Path(path)
     if path.absolute() != path.resolve():
         raise ValueError("Symlinked evidence paths are not supported")
@@ -84,9 +84,49 @@ def checked_directory(path, *, complete=True, epochs=60):
             [r["epoch"] for r in rows] != list(range(len(rows))) or
             (complete and (status.get("status") != "complete" or len(rows) != epochs))):
         raise ValueError("Incomplete or inconsistent condition: "+str(path))
-    if any(not isinstance(r.get("implementation_commit"), str) for r in rows):
-        raise ValueError("Missing actual per-epoch implementation provenance")
+    if require_epoch_provenance and any(not isinstance(r.get("implementation_commit"), str) for r in rows):
+        missing = [r["epoch"] for r in rows if not isinstance(r.get("implementation_commit"), str)]
+        raise ValueError(f"Missing actual per-epoch implementation provenance in {path}: epochs {missing}")
     return identity, read(path/"config.json"), rows
+
+
+def historical_epoch_provenance(path, identity, rows):
+    """Attest the immutable legacy Fixed prefix, never backfill epoch fields."""
+    missing = [r["epoch"] for r in rows if "implementation_commit" not in r]
+    if any("implementation_commit" in r and r["implementation_commit"] not in APPROVED_HISTORICAL for r in rows):
+        raise ValueError("Unknown historical per-epoch implementation in "+str(path))
+    if not missing:
+        return None
+    legacy = "d8721251988691af90a7e01d5e4ff12cdd4571a8"
+    if (Path(path) != ROOT/ORIGINAL/"fixed" or identity.get("method") != "fixed" or
+            identity.get("source_commit") != legacy or missing != list(range(7))):
+        raise ValueError(f"Unattested missing historical implementation provenance in {path}: epochs {missing}")
+    marker_path = Path(path).parent/"amp_compatibility.json"
+    marker = read(marker_path)
+    if (marker.get("legacy_commit") != legacy or
+            marker.get("implementation_commit") != "9a9c0a77773b8e962fe90f2558224033d1140c43" or
+            marker.get("original_fixed_identity") != identity or marker.get("prefix_epochs") != list(range(7))):
+        raise ValueError("Legacy Fixed prefix compatibility marker mismatch")
+    artifacts = marker.get("protected_prefix_artifacts", {})
+    if not {"metrics.json", "config.json", "provenance.json"} <= artifacts.keys():
+        raise ValueError("Legacy Fixed prefix lacks protected JSON evidence")
+    hashes = {}
+    for name, item in artifacts.items():
+        protected = Path(item["path"]).absolute()
+        if (protected.parent != Path(path) or protected.resolve() != protected or
+                protected.name != "amp_resume_origin_"+name or digest(protected) != item["sha256"]):
+            raise ValueError("Protected legacy prefix artifact hash/path mismatch: "+name)
+        hashes[name] = item["sha256"]
+    prefix_path = Path(artifacts["metrics.json"]["path"])
+    prefix = read(prefix_path)
+    if (digest(prefix_path) != marker.get("prefix_metrics_sha256") or
+            len(prefix) != 7 or [r["epoch"] for r in prefix] != list(range(7)) or rows[:7] != prefix or
+            read(artifacts["config.json"]["path"]) != read(Path(path)/"config.json") or
+            read(artifacts["provenance.json"]["path"])["identity"] != identity):
+        raise ValueError("Completed metrics do not preserve the protected legacy epoch0-6 prefix")
+    return dict(epochs_without_per_epoch_commit=missing, legacy_source_commit=legacy,
+        compatibility_marker_sha256=digest(marker_path), protected_artifact_sha256=hashes,
+        evidence="Run-level identity and hash-validated protected prefix; per-epoch commit was not logged. No fields inferred or rewritten.")
 
 
 def historical_sources(config, proposed=None):
@@ -96,11 +136,11 @@ def historical_sources(config, proposed=None):
     evidence, common = {}, None
     for label, condition in (("fixed", "fixed"), ("current", "response_aware")):
         path = source/condition
-        identity, saved_config, rows = checked_directory(path)
+        identity, saved_config, rows = checked_directory(path, require_epoch_provenance=False)
+        legacy_evidence = historical_epoch_provenance(path, identity, rows)
         if (saved_config != expected or identity.get("method") != condition or identity.get("synthetic") or
                 identity.get("source_commit") not in APPROVED_HISTORICAL or
-                identity.get("training_signature") != training_signature(config) or
-                any(r["implementation_commit"] not in APPROVED_HISTORICAL for r in rows)):
+                identity.get("training_signature") != training_signature(config)):
             raise ValueError("Historical result is not an exact compatible completed source: "+condition)
         neutral = {**identity, "method": None}
         if common is not None and common != neutral:
@@ -114,7 +154,8 @@ def historical_sources(config, proposed=None):
         evidence[label] = dict(path=path.relative_to(ROOT).as_posix(), identity=identity,
             files={name: digest(path/name) for name in
                 ("metrics.json", "config.json", "provenance.json", "status.json")},
-            implementation_commits=sorted({r["implementation_commit"] for r in rows}),
+            implementation_commits=sorted({r["implementation_commit"] for r in rows if "implementation_commit" in r}),
+            legacy_epoch_provenance=legacy_evidence,
             reused=True, epochs=len(rows), total_epoch_seconds=sum(r["epoch_seconds"] for r in rows))
     return evidence
 

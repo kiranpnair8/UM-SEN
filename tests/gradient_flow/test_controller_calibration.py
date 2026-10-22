@@ -269,3 +269,86 @@ def test_launcher_has_independent_selection_and_no_node_pin():
     assert "#SBATCH --nodelist" not in text
     assert '--variant "${VARIANT}"' in text and "--resume" in text
     assert "random_matched" not in text
+
+
+def protected_legacy_fixture(plots):
+    """Match the actual pre-AMP writer: no epoch commit fields in the saved prefix."""
+    path = plots.ROOT/spec.ORIGINAL/"fixed"
+    rows = spec.read(path/"metrics.json")
+    for row in rows[:7]:
+        del row["implementation_commit"]
+    write_json(path/"metrics.json", rows)
+    artifacts = {}
+    for name in ("metrics.json", "config.json", "provenance.json"):
+        payload = rows[:7] if name == "metrics.json" else spec.read(path/name)
+        protected = path/("amp_resume_origin_"+name)
+        write_json(protected, payload)
+        artifacts[name] = dict(path=str(protected), sha256=spec.digest(protected))
+    marker = dict(legacy_commit="d8721251988691af90a7e01d5e4ff12cdd4571a8",
+        implementation_commit="9a9c0a77773b8e962fe90f2558224033d1140c43",
+        original_fixed_identity=spec.read(path/"provenance.json")["identity"],
+        prefix_epochs=list(range(7)), prefix_metrics_sha256=artifacts["metrics.json"]["sha256"],
+        protected_prefix_artifacts=artifacts)
+    write_json(path.parent/"amp_compatibility.json", marker)
+    return path, rows, marker
+
+
+def test_protected_legacy_fixed_prefix_reused_without_backfilling(completed_fixture):
+    plots, root, config, identity = completed_fixture
+    path, rows, _ = protected_legacy_fixture(plots)
+    prior = plots.ROOT/spec.ORIGINAL
+    before = {str(p): p.read_bytes() for p in prior.rglob("*") if p.is_file()}
+    sources = spec.historical_sources(config, identity)
+    proof = sources["fixed"]["legacy_epoch_provenance"]
+    assert proof["epochs_without_per_epoch_commit"] == list(range(7))
+    assert "per-epoch commit was not logged" in proof["evidence"]
+    manifest = spec.read(root/"study_manifest.json")
+    manifest["sources"] = sources
+    write_json(root/"study_manifest.json", manifest)
+    write_json(root/"current/reference.json", dict(condition="current",
+        reused_from_completed_prior_experiment=True, **sources["current"]))
+    data, summary = plots.load_results(root)
+    assert data["fixed"] == rows and all("implementation_commit" not in r for r in data["fixed"][:7])
+    assert summary["origins"]["fixed"]["legacy_epoch_provenance"] == proof
+    with pytest.raises(ValueError, match="Missing actual per-epoch"):
+        spec.checked_directory(path)  # Strict default is NOT weakened.
+    assert before == {str(p): p.read_bytes() for p in prior.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("damage", ["missing_marker", "changed_backup", "changed_prefix", "missing_later_epoch", "wrong_identity"])
+def test_legacy_exception_fails_closed_on_invalid_evidence(completed_fixture, damage):
+    plots, _, config, identity = completed_fixture
+    path, rows, marker = protected_legacy_fixture(plots)
+    marker_path = path.parent/"amp_compatibility.json"
+    if damage == "missing_marker":
+        marker_path.unlink()
+    elif damage == "changed_backup":
+        (path/"amp_resume_origin_metrics.json").write_text("[]")
+    elif damage == "changed_prefix":
+        rows[2]["validation"]["top1"] += .01
+        write_json(path/"metrics.json", rows)
+    elif damage == "missing_later_epoch":
+        del rows[8]["implementation_commit"]
+        write_json(path/"metrics.json", rows)
+    else:
+        marker["original_fixed_identity"]["training_signature"] = "wrong"
+        write_json(marker_path, marker)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        spec.historical_sources(config, identity)
+
+
+def test_legacy_exception_never_applies_to_current_or_new_variants(completed_fixture):
+    plots, root, config, identity = completed_fixture
+    protected_legacy_fixture(plots)
+    path = plots.ROOT/spec.ORIGINAL/"response_aware/metrics.json"
+    rows = spec.read(path)
+    del rows[0]["implementation_commit"]
+    write_json(path, rows)
+    with pytest.raises(ValueError, match="Unattested missing historical"):
+        spec.historical_sources(config, identity)
+    new = root/"anchored/metrics.json"
+    rows = spec.read(new)
+    del rows[0]["implementation_commit"]
+    write_json(new, rows)
+    with pytest.raises(ValueError, match="Missing actual per-epoch"):
+        spec.checked_directory(new.parent)

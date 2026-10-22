@@ -28,7 +28,8 @@ def load_results(run_dir):
     data, summaries, origins = {}, {}, {}
     for name in ("fixed", *VARIANTS):
         path = ROOT/sources[name]["path"] if name in sources else run_dir/name
-        identity, saved_config, rows = checked_directory(path, epochs=config["online"]["epochs"])
+        identity, saved_config, rows = checked_directory(path, epochs=config["online"]["epochs"],
+            require_epoch_provenance=name not in sources)
         if name not in sources:
             if (training_invariants(identity) != training_invariants(manifest["identity"]) or
                     identity.get("variant") != name or identity.get("method") != "response_aware" or
@@ -43,7 +44,8 @@ def load_results(run_dir):
         summaries[name] = summarize(rows, saved_config["online"], bool(persistent))
         from experiments.gradient_flow.online_checkpoint import digest
         origins[name] = dict(path=path.relative_to(ROOT).as_posix(), reused=name in sources,
-            metrics_sha256=digest(path/"metrics.json"), identity=identity)
+            metrics_sha256=digest(path/"metrics.json"), identity=identity,
+            legacy_epoch_provenance=sources[name].get("legacy_epoch_provenance") if name in sources else None)
     criteria = config["calibration"]["criteria"]
     comparisons = {name: relative(s, summaries["fixed"], criteria) for name, s in summaries.items() if name != "fixed"}
     gates = {name: calibration_gate(summaries[name], comparison, criteria, complete=True)

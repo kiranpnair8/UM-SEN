@@ -40,6 +40,14 @@ hashes. `current/reference.json` points to the completed result. Hashes are
 rechecked before final aggregation. Existing per-epoch implementation SHAs remain
 visible, including the legacy all-finite prefix and reviewed AMP corrections.
 
+The original writer did not log per-epoch implementation commits. The known
+Fixed epoch0-6 prefix is accepted ONLY when the original AMP compatibility marker,
+protected JSON artifact hashes, original identity/config, and exact prefix rows
+all agree. Missing provenance outside those seven Fixed rows is rejected. The
+manifest records this as run-level/protected-prefix evidence, NOT as invented
+per-epoch commits. Historical rows, markers and backups are never modified;
+new calibration rows retain the strict per-epoch commit requirement.
+
 New results use only `results/gradient_flow/controller_calibration_seed42/`.
 The new root has registration and per-variant locks; identical variants cannot
 run concurrently, but B/C/D can. Resume requires the same clean source SHA,
