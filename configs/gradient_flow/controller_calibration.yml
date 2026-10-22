@@ -1,0 +1,18 @@
+# Predeclared seed-42 calibration. No tuning or automatic variant selection.
+base_config: controller_online.yml
+output: results/gradient_flow/controller_calibration_seed42
+calibration:
+  original_study: results/gradient_flow/controller_online_seed42
+  variants:
+    current: {eta: 0.25, max_step: 0.25, reference_mode: frozen_window, reference_ema: 0.99}
+    conservative: {eta: 0.10, max_step: 0.10, reference_mode: frozen_window, reference_ema: 0.99}
+    very_conservative: {eta: 0.05, max_step: 0.05, reference_mode: frozen_window, reference_ema: 0.99}
+    anchored: {eta: 0.10, max_step: 0.10, reference_mode: ema_window, reference_ema: 0.90}
+  criteria:
+    epochs: 60
+    max_overhead_fraction: 0.20
+    min_variance_reduction: 0.25
+    max_final_accuracy_drop_pp: 0.50
+    strong_min_variance_reduction: 0.40
+    strong_max_accuracy_drop_pp: 0.25
+    tradeoff_accuracy_floor_pp: 0.10

@@ -287,7 +287,7 @@ def run_smoke(args, config, destination, batch, identity, checkpoint, matched):
             scheduler.step()
             is_best = val["top1"] > best
             best = max(best, val["top1"])
-            saved = dict(state_dict=model.state_dict(), optimizer=optimizer.state_dict(),
+            saved = dict(version=2, state_dict=model.state_dict(), optimizer=optimizer.state_dict(),
                 scheduler=scheduler.state_dict(), epoch=epoch, best_metric=best,
                 amp_scaler=None if scaler is None else scaler.state_dict(), rng=capture_rng(),
                 gradient_flow_online=runtime.state_dict())

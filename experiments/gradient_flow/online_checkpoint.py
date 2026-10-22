@@ -60,10 +60,17 @@ def authorize(destination, identity, config, *, resume, allow_amp=False):
     destination = Path(destination).absolute()
     root = destination.parent
     namespace = ROOT/"results/gradient_flow"
+    calibration = root.name.startswith("controller_calibration_")
+    conditions = ("conservative", "very_conservative", "anchored") if calibration else ("fixed", "response_aware", "random_matched")
     if (not resume or destination.resolve() != destination or namespace.resolve() != namespace or
-            not destination.is_relative_to(namespace) or destination.name not in ("fixed", "response_aware", "random_matched")):
+            not destination.is_relative_to(namespace) or destination.name not in conditions):
         raise ValueError("Not an exact local online condition resume path")
-    if not identity.get("synthetic") and root != namespace/"controller_online_seed42":
+    if calibration:
+        from .calibration_spec import OUTPUT, validate_resume_config
+        if root.parent != namespace or (not identity.get("synthetic") and root != ROOT/OUTPUT):
+            raise ValueError("Not the exact calibration resume namespace")
+        validate_resume_config(config, identity, destination)
+    elif not identity.get("synthetic") and root != namespace/"controller_online_seed42":
         raise ValueError("Real full-state resume is restricted to controller_online_seed42/<condition>")
     record = json.loads((destination/"provenance.json").read_text())
     if record["identity"] != identity or json.loads((destination/"config.json").read_text()) != config:
