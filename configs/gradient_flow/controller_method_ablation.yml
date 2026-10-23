@@ -1,0 +1,23 @@
+# Exactly three method designs; inherited training and inverse damping unchanged.
+base_config: controller_online.yml
+output: results/gradient_flow/controller_method_ablation_seed42
+method_ablation:
+  calibration_source: results/gradient_flow/controller_calibration_seed42
+  variants:
+    deep_only: {eta: 0.10, max_step: 0.10, gamma: 0.0, freeze_block0: true, use_deadband: false}
+    regularized: {eta: 0.10, max_step: 0.10, gamma: 0.05, freeze_block0: false, use_deadband: false}
+    deadband_regularized: {eta: 0.10, max_step: 0.10, gamma: 0.05, freeze_block0: false, use_deadband: true}
+  deadband_rule:
+    source: current
+    statistic: positive_nonrefresh_absolute_error_quantile
+    quantile: 0.25
+    interpolation: linear
+    minimum_observations: 16
+  criteria:
+    epochs: 60
+    max_overhead_fraction: 0.20
+    min_variance_reduction: 0.25
+    max_final_accuracy_drop_pp: 0.50
+    strong_min_variance_reduction: 0.40
+    strong_max_accuracy_drop_pp: 0.25
+    tradeoff_accuracy_floor_pp: 0.10

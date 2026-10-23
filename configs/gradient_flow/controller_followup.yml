@@ -1,0 +1,10 @@
+# PREPARED ONLY. Selection/review gate must be satisfied before any training.
+base_config: controller_method_ablation.yml
+followup:
+  seeds: [42, 43, 44]
+  epochs: 60
+  final_sage: null  # Selected explicitly AFTER the method ablation is reviewed.
+  datasets:
+    cifar10: {dataset: torch/cifar10, num_classes: 10}
+    cifar100: {dataset: torch/cifar100, num_classes: 100}
+  cifar100_preprocessing: inherited_cifar10_recipe_requires_explicit_review

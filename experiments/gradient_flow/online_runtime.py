@@ -109,6 +109,8 @@ class SafeOnlineScaler(DiagnosticScaler):
 
 
 class OnlineRuntime:
+    policy_class = OnlinePolicy
+
     def __init__(self, model, optimizer, scheduler, scaler, batch, method, settings, destination,
                  identity, matched=None):
         self.model, self.optimizer = model, optimizer
@@ -119,7 +121,7 @@ class OnlineRuntime:
         self.scope.set_all([4.]*len(model.block))
         if any(a != 4. for name, a in self.scope.snapshot().items() if name.startswith("patch_embed.")):
             raise ValueError("SPS must remain alpha=4")
-        self.policy = OnlinePolicy(len(model.block), method, settings)
+        self.policy = self.policy_class(len(model.block), method, settings)
         self.monitor = GradientMonitor(model, settings["diagnostic_beta"], settings["diagnostic_eps"])
         self.adapter = SafeOnlineScaler(self.monitor, scaler, self.accept_gradients, self.log_amp_event,
                                         settings.get("amp_safety"))

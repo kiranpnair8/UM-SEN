@@ -143,7 +143,7 @@ def prepare(args, config):
     return destination, batch, identity, checkpoint, matched, False
 
 
-def run_official(args, config, destination, batch, identity, checkpoint, matched):
+def run_official(args, config, destination, batch, identity, checkpoint, matched, runtime_class=None):
     import train as official
     original = {key: getattr(official, key) for key in
                 ("_parse_args", "create_scheduler", "train_one_epoch", "validate", "CheckpointSaver", "resume_checkpoint")}
@@ -192,7 +192,7 @@ def run_official(args, config, destination, batch, identity, checkpoint, matched
             native = kwargs.get("loss_scaler")
             if native is not None and not hasattr(native, "_scaler"):
                 raise ValueError("Online measurements support native AMP only")
-            runtime = OnlineRuntime(model, optimizer, kwargs.get("lr_scheduler"),
+            runtime = (runtime_class or OnlineRuntime)(model, optimizer, kwargs.get("lr_scheduler"),
                 getattr(native, "_scaler", None), batch, args.condition, config["online"], destination, identity, matched)
             if checkpoint is not None:
                 runtime.load_state_dict(checkpoint["gradient_flow_online"])
@@ -235,20 +235,20 @@ def run_official(args, config, destination, batch, identity, checkpoint, matched
         sys.argv = old_argv
 
 
-def run_smoke(args, config, destination, batch, identity, checkpoint, matched):
+def run_smoke(args, config, destination, batch, identity, checkpoint, matched, runtime_class=None):
     """Explicit synthetic 2x2-batch plumbing check; never a CIFAR accuracy claim."""
     from experiment_state import capture_rng, restore_rng as restore_training_rng
-    seed_all(42)
+    seed_all(config.get("seed", 42))
     torch.set_num_threads(2)
     device = torch.device(args.device)
     if device.type != "cuda" and args.backend != "torch":
         raise ValueError("CPU smoke requires explicit --backend torch")
     model = build_model(dict(img_size=8, patch_size=4, dim=16, num_heads=4,
-        mlp_ratio=2, layer=4, time_step=2, num_classes=10), args.backend).to(device)
+        mlp_ratio=2, layer=4, time_step=2, num_classes=config.get("num_classes", 10)), args.backend).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=.0005, weight_decay=.06)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.smoke_epochs)
     scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
-    runtime = OnlineRuntime(model, optimizer, scheduler, scaler, batch, args.condition,
+    runtime = (runtime_class or OnlineRuntime)(model, optimizer, scheduler, scaler, batch, args.condition,
                             config["online"], destination, identity, matched)
     best = -1.
     if checkpoint is not None:

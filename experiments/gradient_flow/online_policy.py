@@ -28,6 +28,9 @@ class OnlinePolicy:
     def due(self, epoch):
         return epoch % self.settings["update_every_epochs"] == 0
 
+    def response_update(self, alpha, observed, reference, response):
+        return ResponseController(self.config).update(alpha, observed, reference, response)
+
     def advance(self, epoch, observation, matched=None):
         if self.history and epoch <= self.history[-1]["epoch"]:
             raise ValueError("Controller epochs must increase")
@@ -45,7 +48,7 @@ class OnlinePolicy:
         if self.method == "response_aware" and due:
             if response is None:
                 raise ValueError("Scheduled control requires a measured response")
-            update = ResponseController(self.config).update(before, G, reference, response)
+            update = self.response_update(before, G, reference, response)
         elif self.method == "random_matched" and due:
             if matched is None or matched["epoch"] != epoch or not matched["update_due"]:
                 raise ValueError("Missing matching response-aware epoch")

@@ -61,11 +61,21 @@ def authorize(destination, identity, config, *, resume, allow_amp=False):
     root = destination.parent
     namespace = ROOT/"results/gradient_flow"
     calibration = root.name.startswith("controller_calibration_")
-    conditions = ("conservative", "very_conservative", "anchored") if calibration else ("fixed", "response_aware", "random_matched")
+    method_design = root.name.startswith("controller_method_ablation_")
+    followup = root.parent.name in ("controller_followup_cifar10", "controller_followup_cifar100")
+    conditions = (("deep_only", "regularized", "deadband_regularized") if method_design else
+        ("fixed", "final_sage") if followup else
+        ("conservative", "very_conservative", "anchored") if calibration else ("fixed", "response_aware", "random_matched"))
     if (not resume or destination.resolve() != destination or namespace.resolve() != namespace or
             not destination.is_relative_to(namespace) or destination.name not in conditions):
         raise ValueError("Not an exact local online condition resume path")
-    if calibration:
+    if method_design:
+        from .method_ablation import validate_resume
+        validate_resume(destination, identity, config)
+    elif followup:
+        from .controller_followup import validate_resume
+        validate_resume(destination, identity, config)
+    elif calibration:
         from .calibration_spec import OUTPUT, validate_resume_config
         if root.parent != namespace or (not identity.get("synthetic") and root != ROOT/OUTPUT):
             raise ValueError("Not the exact calibration resume namespace")

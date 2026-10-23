@@ -4,12 +4,12 @@ import argparse
 from pathlib import Path
 
 import torch
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, CIFAR100
 
 from .common import ROOT, load_config, provenance, seed_all
 
 
-def iter_batches(data_dir, config, batch_size=32, num_batches=1, *, split="test"):
+def iter_batches(data_dir, config, batch_size=32, num_batches=1, *, split="test", dataset_class=None):
     """One sequential traversal; seed is provenance, not random resampling."""
     # Same transform factory and eval arguments as the official CIFAR loader;
     # CPU normalization replaces the CUDA prefetcher's equivalent normalization.
@@ -19,7 +19,8 @@ def iter_batches(data_dir, config, batch_size=32, num_batches=1, *, split="test"
         mean=config["mean"], std=config["std"], crop_pct=config.get("crop_pct", 1.))
     if split not in ("train", "test"):
         raise ValueError("CIFAR probe split must be train or test")
-    dataset = CIFAR10(data_dir, train=split == "train", download=False, transform=transform)
+    factory = dataset_class or (CIFAR100 if config.get("dataset") == "torch/cifar100" else CIFAR10)
+    dataset = factory(data_dir, train=split == "train", download=False, transform=transform)
     if batch_size < 1 or num_batches < 1 or batch_size * num_batches > len(dataset):
         raise ValueError("Requested full, non-overlapping batches exceed the selected dataset size")
     from itertools import islice
@@ -27,7 +28,7 @@ def iter_batches(data_dir, config, batch_size=32, num_batches=1, *, split="test"
         shuffle=False, num_workers=0, drop_last=True)
     for batch_index, (images, targets) in enumerate(islice(loader, num_batches)):
         yield dict(images=images.float(), targets=targets.long(), synthetic=False,
-                   dataset="cifar10", split=split, batch_index=batch_index,
+                   dataset="cifar100" if config.get("dataset") == "torch/cifar100" else "cifar10", split=split, batch_index=batch_index,
                    indices=list(range(batch_index * batch_size, (batch_index + 1) * batch_size)),
                    preprocessing=dict(mean=config["mean"], std=config["std"],
                        interpolation=config.get("interpolation", "bicubic"), crop_pct=config.get("crop_pct", 1.)))
