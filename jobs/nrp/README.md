@@ -11,23 +11,25 @@ retains the audited CIFAR-10 normalization. Final conditions are Fixed and
 deep_only (native condition name final_sage), seeds 42, 43, 44. All scientific
 model/controller/optimizer/augmentation/AMP/resume logic remains in pinned code.
 
-## Important storage/scheduling constraint
+## Shared storage and independent scheduling
 
-Read-only cluster inspection on 2026-10-26 found umsen-storage Bound, 100Gi,
-ReadWriteOnce, rook-ceph-block. Multiple pods can share this PVC only on the
-SAME node. All manifests explicitly select one common hostname. Do not change
-individual jobs to different nodes. A multi-node launch needs a separately
-reviewed RWX/storage migration, not six independent mounts of this RWO volume.
+Use the existing Bound 100Gi umsen-storage-rwx PVC: ReadWriteMany on
+rook-cephfs. No PVC is created or modified by this workflow. All jobs mount it
+at /storage. No data/results are copied from, moved on, or deleted from any
+other PVC. Prepare the dataset/evidence once on THIS volume before training.
 
-Default example: cph-dgx-node1.humboldt.edu advertised eight Tesla V100-SXM2-32GB
-GPUs and 76 allocatable CPUs. This is NOT a reservation or availability check.
-With 16 CPU requests per final Job, at most four finals fit concurrently on an
-otherwise idle node; others queue. Quotas and other workloads can reduce this.
+There is no hostname selector, nodeName, node/pod affinity, or storage-induced
+node pinning. The only node selector is amd64, matching the container image.
+All six GPU jobs are independently schedulable across different GPU nodes and
+may run concurrently, subject to GPU/CPU/memory availability and namespace
+quotas. No concurrency or GPU reservation is implied by submitting them.
 Final/smoke memory request/limit is 16Gi, not Lawrence's 64G host allocation.
 Each final Job requests/limits exactly one GPU. No automatic retries or idle
 GPU sleep containers. Deadline is 48h active time, plus up to 30min graceful
 epoch-boundary pause. If the scheduler cannot fit the jobs, review scheduling
-without silently changing the scientific recipe.
+without silently changing the scientific recipe. Shared Git bootstrap and
+dataset staging use CephFS advisory file locks; per-run worktrees, caches,
+logs, statuses, results and checkpoints remain independent.
 
 ## 1. Build an immutable image (required)
 
@@ -35,9 +37,9 @@ The checked-in image tag is a build target, NOT an assertion it exists.
 Docker was unavailable locally; the image has NOT been built or GPU-validated.
 From the support checkout, on a machine with Docker and registry push access:
 
-    docker build --platform linux/amd64 -t ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1 jobs/nrp
-    docker push ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-    docker buildx imagetools inspect ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+    docker build --platform linux/amd64 -t ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2 jobs/nrp
+    docker push ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+    docker buildx imagetools inspect ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
 
 Use the reported registry digest, not a locally invented digest:
 
@@ -45,6 +47,11 @@ Use the reported registry digest, not a locally invented digest:
     export M=results/nrp/manifests
     python -m jobs.nrp.generate_manifests --image "$IMAGE" --output-dir "$M"
     python -m jobs.nrp.validate_manifests --directory "$M" --production --server
+
+Rebuild the image for this RWX runner; do not reuse the previous image digest.
+Use a new reviewed study ID via --study-id if a pre-existing readiness marker
+on this PVC belongs to different support/image/software. Never overwrite or
+relabel old experimental state. The old --node generator option is removed.
 
 Generated runtime manifests stay ignored. For a private image, create an
 appropriate imagePullSecret and pass --image-pull-secret NAME to the generator.
@@ -64,6 +71,10 @@ The check prints nvidia-smi, GPU/driver, Python, torch, compiled CUDA,
 torchvision, timm, SpikingJelly, numpy, image pip freeze, disk/free space, PVC,
 paths, HEAD, node/pod, requested resources/cgroup limits. It exercises CuPy
 kernel compilation on one GPU. Persistent logs and readiness survive Job deletion.
+Readiness compares pinned source, image/software and storage identity, not
+node/GPU identity. Every GPU job independently exercises CuPy and records its
+actual GPU, memory, driver and node. Different compatible GPU nodes are allowed;
+they are NOT treated as interchangeable for runtime/overhead comparisons.
 
 ## 3. Import real parent-selection evidence and download data ONCE
 
@@ -142,13 +153,13 @@ For a confirmed FAILED Job only, deletion removes Job/pod, never PVC data:
 Review failure and saved status before any reapply. Native failed-run guards
 remain strict. Paused valid native checkpoints resume through the original
 authorization; this wrapper does not restart failed runs or overwrite results.
-Never delete umsen-storage. Never use bulk deletion against running work.
+Never delete umsen-storage-rwx. Never use bulk deletion against running work.
 Reapply the CPU inspection Job after deleting its completed prior Job for an
 updated persistent summary. Logs remain available on PVC after pod deletion.
 
 ## Persistent layout and provenance
 
-Default root inside umsen-storage: /storage/umsen-nrp/cifar100-01ad13d-v1/
+Default root inside umsen-storage-rwx: /storage/umsen-nrp/cifar100-01ad13d-v1/
 
     code/UM-SEN/                        shared clean pinned object checkout
     data/cifar100/cifar-100-python/      train/test/meta, one shared dataset
@@ -183,5 +194,5 @@ Any mismatch in required core versions aborts rather than silently substituting.
 
 Local validation covers unit tests, YAML consistency, and server-side Kubernetes
 dry-run only. It does NOT prove image pull/build success or GPU smoke success.
-Review current node capacity/quota/storage use before launch. The existing100Gi
+Review current cluster capacity/quota/storage use before launch. The existing100Gi
 PVC is preserved; free space is checked, no automatic artifact pruning occurs.

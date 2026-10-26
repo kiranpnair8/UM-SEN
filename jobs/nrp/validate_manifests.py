@@ -17,9 +17,9 @@ def validate(directory, production=False):
     pod = sample["spec"]["template"]["spec"]
     container = pod["containers"][0]
     values = {v["name"]: v["value"] for v in container["env"] if "value" in v}
-    image, node, study_id = container["image"], pod["nodeSelector"]["kubernetes.io/hostname"], Path(values["NRP_ROOT"]).name
+    image, study_id = container["image"], Path(values["NRP_ROOT"]).name
     secret = pod.get("imagePullSecrets", [{}])[0].get("name")
-    expected = render(image, node, study_id, secret)
+    expected = render(image, study_id, secret)
     if production and not re.fullmatch(r".+@sha256:[a-f0-9]{64}", image):
         raise ValueError("Production requires a BUILT image@sha256:DIGEST, not the checked-in build tag")
     actual = {}
@@ -38,9 +38,10 @@ def validate(directory, production=False):
 def server_dry_run(directory, documents):
     prefix = ["kubectl", "--context=nautilus", "--namespace="+NAMESPACE, "--request-timeout=30s"]
     pvc = json.loads(subprocess.check_output(prefix+["get", "pvc", PVC, "-o", "json"], text=True))
-    if pvc["status"]["phase"] != "Bound" or "ReadWriteOnce" not in pvc["spec"]["accessModes"]:
+    if (pvc["status"]["phase"] != "Bound" or "ReadWriteMany" not in pvc["spec"]["accessModes"] or
+            pvc["spec"].get("storageClassName") != "rook-cephfs"):
         raise ValueError("Review changed PVC access mode/binding; no PVC modifications are performed")
-    for name in documents:
+    for name in [*documents, "cifar100-final-jobs.yaml"]:
         subprocess.run(prefix+["apply", "--dry-run=server", "-f", str(Path(directory)/name)], check=True)
 
 
@@ -53,7 +54,7 @@ def main():
     documents = validate(args.directory, args.production)
     if args.server:
         server_dry_run(args.directory, documents)
-    print("PASS: exact commit/namespace/PVC/same-node RWO/6 runs/resource limits/output IDs/deterministic bundle.")
+    print("PASS: exact commit/namespace/RWX PVC/no node pinning/6 runs/resource limits/output IDs/deterministic bundle.")
     print("No pods/jobs launched. Image build and GPU execution require the separate environment/smoke stages.")
 
 

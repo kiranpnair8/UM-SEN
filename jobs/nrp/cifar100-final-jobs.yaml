@@ -12,7 +12,7 @@ metadata:
     nrp-seed: '42'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -31,7 +31,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -42,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -60,11 +59,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -129,7 +126,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory
@@ -153,7 +150,7 @@ metadata:
     nrp-seed: '42'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -172,7 +169,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -183,7 +179,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -201,11 +197,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -270,7 +264,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory
@@ -294,7 +288,7 @@ metadata:
     nrp-seed: '43'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -313,7 +307,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -324,7 +317,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -342,11 +335,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -411,7 +402,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory
@@ -435,7 +426,7 @@ metadata:
     nrp-seed: '43'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -454,7 +445,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -465,7 +455,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -483,11 +473,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -552,7 +540,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory
@@ -576,7 +564,7 @@ metadata:
     nrp-seed: '44'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -595,7 +583,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -606,7 +593,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -624,11 +611,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -693,7 +678,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory
@@ -717,7 +702,7 @@ metadata:
     nrp-seed: '44'
   annotations:
     umsen/source-commit: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
-    umsen/pvc-access-mode: ReadWriteOnce
+    umsen/pvc-access-mode: ReadWriteMany
     umsen/image-needs-build: 'true'
 spec:
   backoffLimit: 0
@@ -736,7 +721,6 @@ spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 1800
       nodeSelector:
-        kubernetes.io/hostname: cph-dgx-node1.humboldt.edu
         kubernetes.io/arch: amd64
       securityContext:
         runAsUser: 1000
@@ -747,7 +731,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -765,11 +749,9 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1
-        - name: NRP_NODE
-          value: cph-dgx-node1.humboldt.edu
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
         - name: NRP_PVC
-          value: umsen-storage
+          value: umsen-storage-rwx
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -834,7 +816,7 @@ spec:
       volumes:
       - name: storage
         persistentVolumeClaim:
-          claimName: umsen-storage
+          claimName: umsen-storage-rwx
       - name: shm
         emptyDir:
           medium: Memory

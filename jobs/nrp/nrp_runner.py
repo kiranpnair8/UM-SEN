@@ -91,9 +91,9 @@ def paths():
     if (not root.is_absolute() or root.parent != base or root.resolve() != root or
             not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,62}", root.name) or
             os.environ.get("NRP_SOURCE_COMMIT") != PIN or
-            os.environ.get("POD_NAMESPACE") != NAMESPACE or os.environ.get("NRP_PVC") != "umsen-storage" or
-            os.environ.get("POD_NODE") != os.environ.get("NRP_NODE")):
-        raise ValueError("Unexpected namespace/source/PVC/node/path; the RWO PVC requires SAME-NODE jobs")
+            os.environ.get("POD_NAMESPACE") != NAMESPACE or os.environ.get("NRP_PVC") != "umsen-storage-rwx" or
+            not os.environ.get("POD_NODE")):
+        raise ValueError("Unexpected namespace/source/RWX PVC/path or missing actual node provenance")
     if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", os.environ.get("NRP_IMAGE", "")):
         raise ValueError("Build/push the image and rerender ALL manifests with image@sha256:DIGEST")
     if shutil.disk_usage("/storage").free < 10*1024**3:
@@ -157,7 +157,7 @@ def snapshot(repo, *, gpu):
             (("memory",Path("/sys/fs/cgroup/memory.max")),("cpu",Path("/sys/fs/cgroup/cpu.max"))) if path.is_file()},
         hardware=hardware, gpu_uuid=command(["nvidia-smi","--query-gpu=uuid","--format=csv,noheader"]) if gpu else None,
         node=os.environ["POD_NODE"], pod=os.environ["POD_NAME"], pod_uid=os.environ["POD_UID"],
-        namespace=NAMESPACE, pvc="umsen-storage", mount_path="/storage",
+        namespace=NAMESPACE, pvc="umsen-storage-rwx", mount_path="/storage",
         disk=dict(total_bytes=disk.total, free_bytes=disk.free),
         image_reference=os.environ["NRP_IMAGE"], support_script_sha256=digest(__file__))
     print(json.dumps(result, indent=2), flush=True)
@@ -167,15 +167,16 @@ def snapshot(repo, *, gpu):
 
 
 def environment_key(report):
+    # Software/storage readiness is shared across nodes. Actual hardware remains
+    # in each attempt report, but is not a cross-job scheduling constraint.
     return {k: report[k] for k in ("source_commit","python","versions","cuda_compile_version",
-        "image_reference","support_script_sha256","node","hardware")}
+        "image_reference","support_script_sha256","namespace","pvc","mount_path")}
 
 
 def require_environment(root, report):
     marker = read(root/"checks/environment-ready.json")
-    # GPU UUID is not used as an identity, but model/memory/driver must match.
     if marker["key"] != environment_key(report):
-        raise ValueError("Environment check differs; never mix images/hardware in this NRP study namespace")
+        raise ValueError("Environment check differs; software/source/storage must match across NRP nodes")
 
 
 def stage_parent(root, entry):

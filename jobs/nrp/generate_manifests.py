@@ -10,15 +10,13 @@ import yaml
 
 SOURCE_COMMIT = "01ad13da81eed92b64247c5dc3fcd44608f31a1f"
 NAMESPACE = "kc-ai-research-lab"
-PVC = "umsen-storage"
+PVC = "umsen-storage-rwx"
 STUDY_ID = "cifar100-01ad13d-v1"
-DEFAULT_IMAGE = "ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-v1"
-# Observed 2026-10-26: 8 advertised generic V100 32GB GPUs; NOT a reservation.
-DEFAULT_NODE = "cph-dgx-node1.humboldt.edu"
+DEFAULT_IMAGE = "ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2"
 RUNS = [(condition, seed) for seed in (42, 43, 44) for condition in ("fixed", "deep_only")]
 
 
-def job(mode, image, node, study_id, *, condition=None, seed=42):
+def job(mode, image, study_id, *, condition=None, seed=42):
     run_id = f"{condition}_seed{seed}" if mode == "train" else mode.replace("-", "_")
     suffix = f"{'fixed' if condition == 'fixed' else 'deep'}-seed{seed}" if mode == "train" else "data-prepare" if mode == "data" else mode
     name = "cifar100-"+suffix
@@ -30,7 +28,7 @@ def job(mode, image, node, study_id, *, condition=None, seed=42):
     env = [{"name": name, "value": value} for name, value in {
         "NRP_ROOT": root, "NRP_RUN_ID": run_id, "NRP_SEED": str(seed),
         "NRP_CONDITION": condition or "", "NRP_SOURCE_COMMIT": SOURCE_COMMIT,
-        "NRP_IMAGE": image, "NRP_NODE": node, "NRP_PVC": PVC}.items()]
+        "NRP_IMAGE": image, "NRP_PVC": PVC}.items()]
     env += [{"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}} for name, field in
         (("POD_NAME", "metadata.name"), ("POD_UID", "metadata.uid"),
          ("POD_NAMESPACE", "metadata.namespace"), ("POD_NODE", "spec.nodeName"))]
@@ -47,7 +45,7 @@ def job(mode, image, node, study_id, *, condition=None, seed=42):
     env.append({"name": "NRP_RESOURCES", "value": json.dumps(resources, sort_keys=True)})
     pod = dict(restartPolicy="Never", automountServiceAccountToken=False,
         terminationGracePeriodSeconds=1800 if mode == "train" else 60,
-        nodeSelector={"kubernetes.io/hostname": node, "kubernetes.io/arch": "amd64"},
+        nodeSelector={"kubernetes.io/arch": "amd64"},
         securityContext={"runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
                          "runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
         containers=[dict(name="runner", image=image, imagePullPolicy="IfNotPresent",
@@ -60,24 +58,22 @@ def job(mode, image, node, study_id, *, condition=None, seed=42):
             dict(name="shm", emptyDir={"medium": "Memory", "sizeLimit": "4Gi"}),
             dict(name="parent-input", configMap={"name": "umsen-cifar100-parent-selection", "optional": True})])
     return dict(apiVersion="batch/v1", kind="Job", metadata=dict(name=name, namespace=NAMESPACE, labels=labels,
-        annotations={"umsen/source-commit": SOURCE_COMMIT, "umsen/pvc-access-mode": "ReadWriteOnce",
+        annotations={"umsen/source-commit": SOURCE_COMMIT, "umsen/pvc-access-mode": "ReadWriteMany",
                      "umsen/image-needs-build": "true" if "@sha256:" not in image else "false"}),
         spec=dict(backoffLimit=0, activeDeadlineSeconds=172800 if mode == "train" else 3600,
                   template=dict(metadata=dict(labels=labels.copy()), spec=pod)))
 
 
-def render(image=DEFAULT_IMAGE, node=DEFAULT_NODE, study_id=STUDY_ID, image_pull_secret=None):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]+", node):
-        raise ValueError("Explicit single-node hostname required for the RWO PVC")
+def render(image=DEFAULT_IMAGE, study_id=STUDY_ID, image_pull_secret=None):
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,62}", study_id):
         raise ValueError("Invalid PVC experiment namespace")
     if not image or any(c.isspace() for c in image) or "$"+"{" in image:
         raise ValueError("Supply a concrete image reference")
     result = {f"cifar100-{mode if mode != 'data' else 'data-prepare'}.yaml":
-        job(mode, image, node, study_id) for mode in ("env-check", "data", "smoke", "inspect")}
+        job(mode, image, study_id) for mode in ("env-check", "data", "smoke", "inspect")}
     for condition, seed in RUNS:
         key = f"cifar100-{'fixed' if condition == 'fixed' else 'deep'}-seed{seed}.yaml"
-        result[key] = job("train", image, node, study_id, condition=condition, seed=seed)
+        result[key] = job("train", image, study_id, condition=condition, seed=seed)
     if image_pull_secret:
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]+", image_pull_secret):
             raise ValueError("Invalid image pull Secret name")
@@ -90,12 +86,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default=DEFAULT_IMAGE,
         help="Build/push provided image first, then rerender with registry/image@sha256:DIGEST")
-    parser.add_argument("--node", default=DEFAULT_NODE)
     parser.add_argument("--study-id", default=STUDY_ID)
     parser.add_argument("--image-pull-secret", default=None)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent)
     args = parser.parse_args()
-    docs = render(args.image, args.node, args.study_id, args.image_pull_secret)
+    docs = render(args.image, args.study_id, args.image_pull_secret)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for name, document in docs.items():
         (args.output_dir/name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
