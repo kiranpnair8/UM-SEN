@@ -1,0 +1,14 @@
+# Explicit adaptation, NOT a verified official CIFAR-100 recipe.
+base_config: controller_online.yml
+dataset: torch/cifar100
+num_classes: 100
+output: results/gradient_flow/cifar100_deep_only_followup
+mean: [0.4914, 0.4822, 0.4465]
+std: [0.2470, 0.2435, 0.2616]
+cifar100_audit:
+  native_cifar100_recipe_found: false
+  normalization: inherited_cifar10_explicit_review_required
+  recipe: inherited_released_cifar10_60_epoch_prefix
+  seeds: [42, 43, 44]
+  conditions: [fixed, final_sage]
+  final_sage: deep_only
