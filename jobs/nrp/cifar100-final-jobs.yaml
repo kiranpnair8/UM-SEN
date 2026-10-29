@@ -29,6 +29,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -41,7 +42,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -59,7 +60,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -123,6 +124,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -135,6 +139,17 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: batch/v1
 kind: Job
@@ -167,6 +182,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -179,7 +195,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -197,7 +213,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -261,6 +277,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -273,6 +292,17 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: batch/v1
 kind: Job
@@ -305,6 +335,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -317,7 +348,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -335,7 +366,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -399,6 +430,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -411,6 +445,17 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: batch/v1
 kind: Job
@@ -443,6 +488,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -455,7 +501,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -473,7 +519,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -537,6 +583,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -549,6 +598,17 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: batch/v1
 kind: Job
@@ -581,6 +641,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -593,7 +654,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -611,7 +672,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -675,6 +736,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -687,6 +751,17 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: batch/v1
 kind: Job
@@ -719,6 +794,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      serviceAccountName: umsen-cifar100-coordination
       terminationGracePeriodSeconds: 1800
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -731,7 +807,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: runner
-        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+        image: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         imagePullPolicy: IfNotPresent
         command:
         - /opt/nrp/entrypoint.sh
@@ -749,7 +825,7 @@ spec:
         - name: NRP_SOURCE_COMMIT
           value: 01ad13da81eed92b64247c5dc3fcd44608f31a1f
         - name: NRP_IMAGE
-          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+          value: ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
         - name: NRP_PVC
           value: umsen-storage-rwx
         - name: POD_NAME
@@ -813,6 +889,9 @@ spec:
         - name: parent-input
           mountPath: /parent-input
           readOnly: true
+        - name: coordination-token
+          mountPath: /var/run/secrets/nrp
+          readOnly: true
       volumes:
       - name: storage
         persistentVolumeClaim:
@@ -825,3 +904,14 @@ spec:
         configMap:
           name: umsen-cifar100-parent-selection
           optional: true
+      - name: coordination-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt

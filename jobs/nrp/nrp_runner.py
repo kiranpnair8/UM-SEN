@@ -15,6 +15,11 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+if __package__:
+    from .lease_lock import KubernetesLease, delegate_native_lock
+else:
+    from lease_lock import KubernetesLease, delegate_native_lock
+
 
 PIN = "01ad13da81eed92b64247c5dc3fcd44608f31a1f"
 NAMESPACE = "kc-ai-research-lab"
@@ -60,14 +65,11 @@ def immutable(path, payload):
 
 @contextmanager
 def locked(path, *, blocking=False):
-    import fcntl
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with Path(path).open("a") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        try:
-            yield
-        finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    root, path = Path(os.environ["NRP_ROOT"]), Path(path)
+    if path.parent != root/"locks" or path.suffix != ".lock":
+        raise ValueError("Unexpected NRP coordination scope")
+    with KubernetesLease(root.name, path.stem).held(blocking=blocking) as guard:
+        yield guard
 
 
 def command(args, cwd=None):
@@ -324,24 +326,27 @@ def main():
     args = parser.parse_args()
     root, run_id = paths(), os.environ["NRP_RUN_ID"]
     status = root/"runs"/run_id/"nrp-status.json"
-    with locked(root/"locks"/(run_id+".lock")):
+    with locked(root/"locks"/(run_id+".lock")) as guard:
         try:
             repo = checkout(root,run_id)
             entry = source_module(repo)
+            # Infrastructure-only substitution: source files/math stay unchanged.
+            # Native approval/training locks are wholly inside this per-run Lease.
+            entry.lock = lambda path: delegate_native_lock(path, repo, guard)
             report = snapshot(repo,gpu=args.mode in ("env-check","smoke","train"))
             write(status,dict(status="running",source_commit=PIN,pod_uid=os.environ["POD_UID"]))
             if args.mode == "env-check":
                 immutable(root/"checks/environment-ready.json",dict(key=environment_key(report),passed=True))
                 record_attempt(root,run_id,report)
             elif args.mode == "data":
-                with locked(root/"locks/data.lock"):
-                    parent = stage_parent(root,entry)
-                    from torchvision.datasets import CIFAR100
-                    for training in (True,False):
-                        CIFAR100(root/"data/cifar100",train=training,download=True)
-                    marker = dict(source_commit=PIN,parent=parent,files_sha256=data_hashes(root/"data/cifar100"))
-                    immutable(root/"checks/data-ready.json",marker)
-                    record_attempt(root,run_id,report)
+                # run_id=data already owns the shared data-preparation Lease.
+                parent = stage_parent(root,entry)
+                from torchvision.datasets import CIFAR100
+                for training in (True,False):
+                    CIFAR100(root/"data/cifar100",train=training,download=True)
+                marker = dict(source_commit=PIN,parent=parent,files_sha256=data_hashes(root/"data/cifar100"))
+                immutable(root/"checks/data-ready.json",marker)
+                record_attempt(root,run_id,report)
             elif args.mode == "inspect":
                 inspect_results(root)
                 record_attempt(root,run_id,report)

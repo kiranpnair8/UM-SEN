@@ -28,7 +28,7 @@ Each final Job requests/limits exactly one GPU. No automatic retries or idle
 GPU sleep containers. Deadline is 48h active time, plus up to 30min graceful
 epoch-boundary pause. If the scheduler cannot fit the jobs, review scheduling
 without silently changing the scientific recipe. Shared Git bootstrap and
-dataset staging use CephFS advisory file locks; per-run worktrees, caches,
+dataset staging use Kubernetes Leases, not CephFS advisory locks; per-run worktrees, caches,
 logs, statuses, results and checkpoints remain independent.
 
 ## 1. Build an immutable image (required)
@@ -37,9 +37,9 @@ The checked-in image tag is a build target, NOT an assertion it exists.
 Docker was unavailable locally; the image has NOT been built or GPU-validated.
 From the support checkout, on a machine with Docker and registry push access:
 
-    docker build --platform linux/amd64 -t ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2 jobs/nrp
-    docker push ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
-    docker buildx imagetools inspect ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2
+    docker build --platform linux/amd64 -t ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3 jobs/nrp
+    docker push ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
+    docker buildx imagetools inspect ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3
 
 Use the reported registry digest, not a locally invented digest:
 
@@ -48,13 +48,69 @@ Use the reported registry digest, not a locally invented digest:
     python -m jobs.nrp.generate_manifests --image "$IMAGE" --output-dir "$M"
     python -m jobs.nrp.validate_manifests --directory "$M" --production --server
 
-Rebuild the image for this RWX runner; do not reuse the previous image digest.
+Rebuild the image for this Lease runner; do not reuse the previous image digest.
 Use a new reviewed study ID via --study-id if a pre-existing readiness marker
 on this PVC belongs to different support/image/software. Never overwrite or
 relabel old experimental state. The old --node generator option is removed.
 
+Before any Job, apply coordination resources (no training is launched):
+
+    kubectl --context=nautilus -n kc-ai-research-lab apply -f "$M/cifar100-coordination.yaml"
+
+This precreates eleven deterministic per-study Leases, a dedicated ServiceAccount,
+Role and RoleBinding. The account may only GET/UPDATE those named Leases and GET
+pods in this namespace; it cannot create/delete Leases, edit jobs, or read Secrets.
+Jobs mount an explicitly projected, rotating API token/CA; default automount stays
+disabled. If namespace RBAC installation is forbidden, ask its administrator to
+apply this file. Do not substitute elevated credentials or filesystem-lock fallback.
+
+### Coordination and retry safety
+
+The old data stage took locks/data.lock twice: its run_id=data outer lock and
+the inner data-preparation lock used separate file handles, causing self-contention
+even with no competing pod. This is a definite software defect; the trace alone
+does not prove a CephFS failure. The nested acquisition is removed. Old PVC .lock
+files are ignored, never deleted. There is no flock in NRP coordination.
+
+Each run holds one Lease; shared Git checkout has a separate short Lease. In the
+NRP process only, native worktree-local approval/training locks delegate to that
+outer per-run Lease. Scientific source files, controller/math and dataset calls
+are unchanged. Never run an older flock-based image alongside this protocol.
+
+Ownership is pod-name/pod-UID and acquisition/renew/release use resourceVersion
+compare-and-swap. Renewal is every 20 seconds, duration 120 seconds. Expiration
+alone NEVER evicts a live/Unknown/terminating pod. Reclaim additionally requires
+the API to confirm the prior UID is terminal, gone, or replaced. API uncertainty
+fails closed. Git contention waits at most ten minutes; duplicate run/data jobs
+fail immediately with owner identity. Acquisition/recovery/release/failures are
+JSON events in stdout and persistent per-attempt logs.
+
+Normal completion or Python exception releases ownership only if still owned.
+Pod termination leaves at most an expiring Lease; after owner termination and
+expiry, retry reclaims it without deleting any PVC file. Renewal/ownership loss
+exits the writer immediately (74), leaving recovery to a subsequent pod. Never
+force-delete a live Lease/pod: fence/review unreachable nodes before declaring
+old writers gone. Reapplying the coordination manifest preserves runtime holder
+fields; do not replace/reset Leases manually while jobs are active.
+
+To retry a confirmed terminated FAILED data Job after rebuilding/rerendering:
+
+    kubectl --context=nautilus -n kc-ai-research-lab delete job cifar100-data-prepare --ignore-not-found --wait=true
+    kubectl --context=nautilus -n kc-ai-research-lab apply -f "$M/cifar100-data-prepare.yaml"
+    kubectl --context=nautilus -n kc-ai-research-lab logs -f job/cifar100-data-prepare
+    kubectl --context=nautilus -n kc-ai-research-lab wait --for=condition=complete job/cifar100-data-prepare --timeout=3600s
+
+Wait at least 120 seconds after the previous Lease renewal if a Lease owner
+terminated without release. Do not delete datasets, lock files, results, PVCs or
+readiness markers to retry. Existing valid data is reused. Data preparation itself
+does not require changing old environment/smoke markers. For subsequent full
+workflow validation, immutable markers from a previous image require a reviewed
+new --study-id, not overwriting old checks/results.
+
 Generated runtime manifests stay ignored. For a private image, create an
 appropriate imagePullSecret and pass --image-pull-secret NAME to the generator.
+The new dedicated ServiceAccount does not inherit a default ServiceAccount's
+imagePullSecrets; pass your existing registry Secret explicitly when needed.
 For a private GitHub repository, create Secret umsen-github-read with key token
 using your credential-management procedure; never put tokens in source/YAML/logs.
 Git uses optional askpass, never embeds the token in the stored remote URL.

@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: umsen-cifar100-coordination
+  namespace: kc-ai-research-lab
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: umsen-c100-9ccdf214d6-coordination
+  namespace: kc-ai-research-lab
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  resourceNames:
+  - umsen-c100-9ccdf214d6-git
+  - umsen-c100-9ccdf214d6-env-check
+  - umsen-c100-9ccdf214d6-data
+  - umsen-c100-9ccdf214d6-smoke
+  - umsen-c100-9ccdf214d6-inspect
+  - umsen-c100-9ccdf214d6-fixed-seed42
+  - umsen-c100-9ccdf214d6-deep-only-seed42
+  - umsen-c100-9ccdf214d6-fixed-seed43
+  - umsen-c100-9ccdf214d6-deep-only-seed43
+  - umsen-c100-9ccdf214d6-fixed-seed44
+  - umsen-c100-9ccdf214d6-deep-only-seed44
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: umsen-c100-9ccdf214d6-coordination
+  namespace: kc-ai-research-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: umsen-c100-9ccdf214d6-coordination
+subjects:
+- kind: ServiceAccount
+  name: umsen-cifar100-coordination
+  namespace: kc-ai-research-lab
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-git
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-env-check
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-data
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-smoke
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-inspect
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-fixed-seed42
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-deep-only-seed42
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-fixed-seed43
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-deep-only-seed43
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-fixed-seed44
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: umsen-c100-9ccdf214d6-deep-only-seed44
+  namespace: kc-ai-research-lab
+spec:
+  leaseDurationSeconds: 120

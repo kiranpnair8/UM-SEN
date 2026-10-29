@@ -62,6 +62,7 @@ def test_generator_custom_digest_and_secret_roundtrip(tmp_path):
         (tmp_path/name).write_text(yaml.safe_dump(doc,sort_keys=False))
     finals = [d for d in documents.values() if d["metadata"]["labels"]["nrp-stage"] == "train"]
     (tmp_path/"cifar100-final-jobs.yaml").write_text(yaml.safe_dump_all(finals,sort_keys=False))
+    (tmp_path/"cifar100-coordination.yaml").write_text(yaml.safe_dump_all(generator.coordination("new-study-v1"),sort_keys=False))
     assert validate(tmp_path,production=True) == documents
     assert all(v["spec"]["template"]["spec"]["imagePullSecrets"] == [{"name":"registry-read"}] for v in documents.values())
     changed = documents["cifar100-fixed-seed42.yaml"]
@@ -120,14 +121,23 @@ def test_environment_readiness_allows_different_nodes_and_gpus():
 
 
 def test_git_bootstrap_lock_serializes_without_weakening_run_locks(tmp_path,monkeypatch):
+    from contextlib import contextmanager
     calls = []
-    fake = SimpleNamespace(LOCK_EX=2,LOCK_NB=4,LOCK_UN=8,flock=lambda fd,flags: calls.append(flags))
-    monkeypatch.setitem(sys.modules,"fcntl",fake)
-    with runner.locked(tmp_path/"git.lock",blocking=True):
+    class FakeLease:
+        def __init__(self, study, scope):
+            self.scope = scope
+        @contextmanager
+        def held(self, **kwargs):
+            calls.append((self.scope,kwargs["blocking"]))
+            yield self
+    monkeypatch.setenv("NRP_ROOT",str(tmp_path))
+    monkeypatch.setattr(runner,"KubernetesLease",FakeLease)
+    with runner.locked(tmp_path/"locks/git.lock",blocking=True):
         pass
-    with runner.locked(tmp_path/"run.lock"):
+    with runner.locked(tmp_path/"locks/data.lock"):
         pass
-    assert calls == [2,8,6,8]
+    assert calls == [("git",True),("data",False)]
+    assert not (tmp_path/"locks").exists()
 
 
 def test_training_and_smoke_paths_are_explicitly_different():
@@ -200,7 +210,7 @@ def test_server_validation_uses_bound_rwx_and_dry_runs_every_manifest(tmp_path,m
     monkeypatch.setattr(subprocess,"run",lambda args,**kw: commands.append(args))
     documents = generator.render(IMAGE)
     server_dry_run(tmp_path,documents)
-    assert len(commands) == len(documents)+1 == 11
+    assert len(commands) == len(documents)+2 == 12
     assert all("--context=nautilus" in c and "--namespace=kc-ai-research-lab" in c and
                "--dry-run=server" in c for c in commands)
     assert Path(commands[-1][-1]).name == "cifar100-final-jobs.yaml"

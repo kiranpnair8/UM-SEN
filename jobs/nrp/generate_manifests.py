@@ -7,12 +7,14 @@ import re
 
 import yaml
 
+from .lease_lock import DURATION, SCOPES, SERVICE_ACCOUNT, lease_name
+
 
 SOURCE_COMMIT = "01ad13da81eed92b64247c5dc3fcd44608f31a1f"
 NAMESPACE = "kc-ai-research-lab"
 PVC = "umsen-storage-rwx"
 STUDY_ID = "cifar100-01ad13d-v1"
-DEFAULT_IMAGE = "ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-rwx-v2"
+DEFAULT_IMAGE = "ghcr.io/kiranpnair8/um-sen-nrp:torch251-cu121-py310-lease-v3"
 RUNS = [(condition, seed) for seed in (42, 43, 44) for condition in ("fixed", "deep_only")]
 
 
@@ -43,7 +45,7 @@ def job(mode, image, study_id, *, condition=None, seed=42):
     if mode not in ("data", "inspect"):
         resources["nvidia.com/gpu"] = "1"
     env.append({"name": "NRP_RESOURCES", "value": json.dumps(resources, sort_keys=True)})
-    pod = dict(restartPolicy="Never", automountServiceAccountToken=False,
+    pod = dict(restartPolicy="Never", automountServiceAccountToken=False, serviceAccountName=SERVICE_ACCOUNT,
         terminationGracePeriodSeconds=1800 if mode == "train" else 60,
         nodeSelector={"kubernetes.io/arch": "amd64"},
         securityContext={"runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000,
@@ -53,10 +55,14 @@ def job(mode, image, study_id, *, condition=None, seed=42):
             resources=dict(requests=resources.copy(), limits=resources.copy()),
             securityContext=dict(allowPrivilegeEscalation=False, capabilities={"drop": ["ALL"]}),
             volumeMounts=[dict(name="storage", mountPath="/storage"),
-                dict(name="shm", mountPath="/dev/shm"), dict(name="parent-input", mountPath="/parent-input", readOnly=True)])],
+                dict(name="shm", mountPath="/dev/shm"), dict(name="parent-input", mountPath="/parent-input", readOnly=True),
+                dict(name="coordination-token", mountPath="/var/run/secrets/nrp", readOnly=True)])],
         volumes=[dict(name="storage", persistentVolumeClaim={"claimName": PVC}),
             dict(name="shm", emptyDir={"medium": "Memory", "sizeLimit": "4Gi"}),
-            dict(name="parent-input", configMap={"name": "umsen-cifar100-parent-selection", "optional": True})])
+            dict(name="parent-input", configMap={"name": "umsen-cifar100-parent-selection", "optional": True}),
+            dict(name="coordination-token", projected={"sources":[
+                {"serviceAccountToken":{"path":"token", "expirationSeconds":3600}},
+                {"configMap":{"name":"kube-root-ca.crt", "items":[{"key":"ca.crt", "path":"ca.crt"}]}}]})])
     return dict(apiVersion="batch/v1", kind="Job", metadata=dict(name=name, namespace=NAMESPACE, labels=labels,
         annotations={"umsen/source-commit": SOURCE_COMMIT, "umsen/pvc-access-mode": "ReadWriteMany",
                      "umsen/image-needs-build": "true" if "@sha256:" not in image else "false"}),
@@ -82,6 +88,23 @@ def render(image=DEFAULT_IMAGE, study_id=STUDY_ID, image_pull_secret=None):
     return result
 
 
+def coordination(study_id=STUDY_ID):
+    names = [lease_name(study_id, scope) for scope in SCOPES]
+    role = "umsen-c100-"+names[0].split("-")[2]+"-coordination"
+    def metadata(name):
+        return dict(name=name, namespace=NAMESPACE)
+    return [dict(apiVersion="v1", kind="ServiceAccount", metadata=metadata(SERVICE_ACCOUNT),
+                 automountServiceAccountToken=False),
+        dict(apiVersion="rbac.authorization.k8s.io/v1", kind="Role", metadata=metadata(role), rules=[
+            dict(apiGroups=["coordination.k8s.io"], resources=["leases"], resourceNames=names, verbs=["get","update"]),
+            dict(apiGroups=[""], resources=["pods"], verbs=["get"])]),
+        dict(apiVersion="rbac.authorization.k8s.io/v1", kind="RoleBinding", metadata=metadata(role),
+             roleRef=dict(apiGroup="rbac.authorization.k8s.io", kind="Role", name=role),
+             subjects=[dict(kind="ServiceAccount", name=SERVICE_ACCOUNT, namespace=NAMESPACE)]),
+        *[dict(apiVersion="coordination.k8s.io/v1", kind="Lease", metadata=metadata(name),
+               spec=dict(leaseDurationSeconds=DURATION)) for name in names]]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default=DEFAULT_IMAGE,
@@ -97,6 +120,8 @@ def main():
     finals = [v for v in docs.values() if v["metadata"]["labels"]["nrp-stage"] == "train"]
     (args.output_dir/"cifar100-final-jobs.yaml").write_text(
         yaml.safe_dump_all(finals, sort_keys=False), encoding="utf-8")
+    (args.output_dir/"cifar100-coordination.yaml").write_text(
+        yaml.safe_dump_all(coordination(args.study_id), sort_keys=False), encoding="utf-8")
     print("Rendered 4 preparation/inspection Jobs and exactly 6 independent final Jobs. Nothing submitted.")
 
 

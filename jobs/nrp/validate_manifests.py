@@ -8,7 +8,7 @@ import subprocess
 
 import yaml
 
-from .generate_manifests import NAMESPACE, PVC, RUNS, SOURCE_COMMIT, render
+from .generate_manifests import NAMESPACE, PVC, coordination, render
 
 
 def validate(directory, production=False):
@@ -32,6 +32,8 @@ def validate(directory, production=False):
     finals = [d for d in actual.values() if d["metadata"]["labels"]["nrp-stage"] == "train"]
     if bundle != finals or len(finals) != 6 or len({d["metadata"]["name"] for d in actual.values()}) != 10:
         raise ValueError("Need exactly 6 unique final jobs and 4 preparation/inspection jobs")
+    if list(yaml.safe_load_all((directory/"cifar100-coordination.yaml").read_text())) != coordination(study_id):
+        raise ValueError("Mismatched Lease/RBAC coordination manifest")
     return actual
 
 
@@ -41,7 +43,7 @@ def server_dry_run(directory, documents):
     if (pvc["status"]["phase"] != "Bound" or "ReadWriteMany" not in pvc["spec"]["accessModes"] or
             pvc["spec"].get("storageClassName") != "rook-cephfs"):
         raise ValueError("Review changed PVC access mode/binding; no PVC modifications are performed")
-    for name in [*documents, "cifar100-final-jobs.yaml"]:
+    for name in ["cifar100-coordination.yaml", *documents, "cifar100-final-jobs.yaml"]:
         subprocess.run(prefix+["apply", "--dry-run=server", "-f", str(Path(directory)/name)], check=True)
 
 
